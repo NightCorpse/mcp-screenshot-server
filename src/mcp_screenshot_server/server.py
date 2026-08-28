@@ -27,12 +27,14 @@ from .models import (
     ImageInfo,
     ImageListResult,
     MemoryStatsResult,
+    OCRResult,
     PreviewResult,
     SaveResult,
     ScreenshotResult,
     SessionExportResult,
     SessionImportResult,
     StepAnnotationResult,
+    TextElement,
     UndoCountResult,
 )
 from .storage import (
@@ -112,6 +114,116 @@ _image_to_base64 = image_to_base64
 _get_font = get_font
 
 
+def extract_text_elements_from_image(
+    image: PILImage.Image,
+    query: str | None = None,
+    min_confidence: float = 30.0
+) -> list[TextElement]:
+    """
+    Run Tesseract OCR on a PIL image to extract text elements with bounding boxes.
+    Gracefully returns an empty list if Tesseract is not installed or fails.
+    """
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+        tmp_path = tmp.name
+
+    try:
+        image.save(tmp_path, "PNG")
+        res = subprocess.run(
+            ["tesseract", tmp_path, "stdout", "tsv"],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        if res.returncode != 0 or not res.stdout:
+            return []
+
+        lines = res.stdout.strip().split("\n")
+        if len(lines) < 2:
+            return []
+
+        header = lines[0].split("\t")
+        try:
+            left_idx = header.index("left")
+            top_idx = header.index("top")
+            width_idx = header.index("width")
+            height_idx = header.index("height")
+            conf_idx = header.index("conf")
+            text_idx = header.index("text")
+            level_idx = header.index("level")
+        except ValueError:
+            return []
+
+        elements: list[TextElement] = []
+        for line in lines[1:]:
+            parts = line.split("\t")
+            if len(parts) <= text_idx:
+                continue
+
+            try:
+                level = int(parts[level_idx])
+                conf = float(parts[conf_idx])
+                text = parts[text_idx].strip()
+            except (ValueError, IndexError):
+                continue
+
+            if level == 5 and text and conf >= min_confidence:
+                try:
+                    x = int(parts[left_idx])
+                    y = int(parts[top_idx])
+                    w = int(parts[width_idx])
+                    h = int(parts[height_idx])
+                except (ValueError, IndexError):
+                    continue
+
+                elements.append(
+                    TextElement(
+                        text=text,
+                        x=x,
+                        y=y,
+                        width=w,
+                        height=h,
+                        confidence=round(conf, 1)
+                    )
+                )
+
+        if query:
+            q = query.lower().strip()
+            elements = [el for el in elements if q in el.text.lower()]
+
+        return elements
+    except Exception:
+        return []
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
+def find_target_text_box(
+    image: PILImage.Image,
+    target_text: str
+) -> TextElement | None:
+    """Find the best matching bounding box for target_text on the image."""
+    elements = extract_text_elements_from_image(image)
+    if not elements or not target_text:
+        return None
+
+    query = target_text.lower().strip()
+    # 1. Exact match
+    for el in elements:
+        if el.text.lower() == query:
+            return el
+
+    # 2. Substring match
+    for el in elements:
+        if query in el.text.lower() or el.text.lower() in query:
+            return el
+
+    return None
+
+
 # =============================================================================
 # Screenshot Capture Tools
 # =============================================================================
@@ -128,6 +240,7 @@ def capture_screenshot(
     width: Annotated[int | None, Field(description="Width for region capture")] = None,
     height: Annotated[int | None, Field(description="Height for region capture")] = None,
     window_id: Annotated[int | None, Field(description="Window ID for window capture (macOS). Use 'osascript' or 'GetWindowID' to find window IDs.")] = None,
+    include_ocr: Annotated[bool, Field(description="Run Tesseract OCR to extract on-screen text coordinates")] = False,
 ) -> ScreenshotResult:
     """
     Capture a screenshot of the screen, a region, or a specific window.
@@ -186,10 +299,15 @@ def capture_screenshot(
         image = PILImage.open(tmp_path)
         image_id = _store_image(image)
 
+        detected_text = []
+        if include_ocr:
+            detected_text = extract_text_elements_from_image(image)
+
         return ScreenshotResult(
             image_id=image_id,
             width=image.width,
             height=image.height,
+            detected_text=detected_text,
             message=f"Screenshot captured successfully ({mode} mode)"
         )
 
@@ -201,7 +319,8 @@ def capture_screenshot(
 
 @mcp.tool()
 def load_image(
-    path: Annotated[str, Field(description="Path to the image file to load")]
+    path: Annotated[str, Field(description="Path to the image file to load")],
+    include_ocr: Annotated[bool, Field(description="Run Tesseract OCR to extract on-screen text coordinates")] = False,
 ) -> ScreenshotResult:
     """Load an existing image file for annotation."""
     path = os.path.expanduser(path)
@@ -212,11 +331,36 @@ def load_image(
     image = PILImage.open(path)
     image_id = _store_image(image)
 
+    detected_text = []
+    if include_ocr:
+        detected_text = extract_text_elements_from_image(image)
+
     return ScreenshotResult(
         image_id=image_id,
         width=image.width,
         height=image.height,
+        detected_text=detected_text,
         message=f"Image loaded from {path}"
+    )
+
+
+@mcp.tool()
+def detect_text(
+    image_id: Annotated[str, Field(description="ID of the image to analyze with OCR")],
+    query: Annotated[str | None, Field(description="Optional keyword to search for specific text")] = None,
+    min_confidence: Annotated[float, Field(description="Minimum OCR confidence threshold (0-100)")] = 30.0,
+) -> OCRResult:
+    """
+    Run Tesseract OCR on a captured or loaded image to extract text elements
+    with exact pixel coordinates (x, y, width, height) and confidence scores.
+    """
+    image = _get_image(image_id)
+    elements = extract_text_elements_from_image(image, query=query, min_confidence=min_confidence)
+    return OCRResult(
+        image_id=image_id,
+        count=len(elements),
+        elements=elements,
+        message=f"Detected {len(elements)} text element(s)" + (f" matching '{query}'" if query else "")
     )
 
 
@@ -593,12 +737,13 @@ def precise_annotate(
         Literal["box", "circle", "text", "arrow", "line"],
         Field(description="Type of annotation")
     ],
-    x: Annotated[int, Field(description="X coordinate in pixels (from left edge)")],
-    y: Annotated[int, Field(description="Y coordinate in pixels (from top edge)")],
+    x: Annotated[int | None, Field(description="X coordinate in pixels (from left edge)")] = None,
+    y: Annotated[int | None, Field(description="Y coordinate in pixels (from top edge)")] = None,
+    target_text: Annotated[str | None, Field(description="Auto-target a UI element by text using Tesseract OCR")] = None,
     text: Annotated[str | None, Field(description="Text content (for text type)")] = None,
-    width: Annotated[int, Field(description="Width in pixels (for box)")] = 100,
-    height: Annotated[int, Field(description="Height in pixels (for box)")] = 50,
-    radius: Annotated[int, Field(description="Radius in pixels (for circle)")] = 30,
+    width: Annotated[int | None, Field(description="Width in pixels (for box)")] = None,
+    height: Annotated[int | None, Field(description="Height in pixels (for box)")] = None,
+    radius: Annotated[int | None, Field(description="Radius in pixels (for circle)")] = None,
     x2: Annotated[int | None, Field(description="End X coordinate (for arrow/line)")] = None,
     y2: Annotated[int | None, Field(description="End Y coordinate (for arrow/line)")] = None,
     color: Annotated[str, Field(description="Color (name or hex)")] = "red",
@@ -606,20 +751,46 @@ def precise_annotate(
     font_size: Annotated[int, Field(gt=0, description="Font size for text")] = 24,
 ) -> AnnotationResult:
     """
-    Pixel-perfect annotation tool. Places annotations at EXACT pixel coordinates.
-    No anchor adjustments, no auto-positioning - pure pixel placement.
+    Pixel-perfect annotation tool. Places annotations at EXACT pixel coordinates
+    or automatically targets detected text elements via Tesseract OCR.
 
     Coordinates:
     - x, y: Top-left corner for box, center for circle, start for text
     - x2, y2: End point for arrows/lines
-
-    Examples:
-    - precise_annotate(img, "box", x=100, y=200, width=150, height=50)
-    - precise_annotate(img, "text", x=100, y=180, text="Label")
-    - precise_annotate(img, "arrow", x=50, y=100, x2=200, y2=100)
-    - precise_annotate(img, "circle", x=300, y=300, radius=40)
+    - target_text: Automatically finds text on screen and aligns the annotation
     """
     image = _get_image(image_id)
+
+    # Auto-resolve target_text if provided
+    if target_text:
+        box = find_target_text_box(image, target_text)
+        if box:
+            if annotation_type == "box":
+                pad = 4
+                x = box.x - pad if x is None else x
+                y = box.y - pad if y is None else y
+                width = (box.width + pad * 2) if width is None else width
+                height = (box.height + pad * 2) if height is None else height
+            elif annotation_type == "circle":
+                x = (box.x + box.width // 2) if x is None else x
+                y = (box.y + box.height // 2) if y is None else y
+                radius = max(box.width, box.height) // 2 + 6 if radius is None else radius
+            elif annotation_type == "text":
+                x = box.x if x is None else x
+                y = (box.y - font_size - 4) if y is None else y
+            elif annotation_type in ["arrow", "line"]:
+                x2 = (box.x + box.width // 2) if x2 is None else x2
+                y2 = (box.y + box.height // 2) if y2 is None else y2
+                x = (x2 - 60) if x is None else x
+                y = (y2 - 60) if y is None else y
+
+    # Defaults if not provided
+    x = 0 if x is None else x
+    y = 0 if y is None else y
+    width = 100 if width is None else width
+    height = 50 if height is None else height
+    radius = 30 if radius is None else radius
+
     draw = ImageDraw.Draw(image, "RGBA")
     message = ""
 
@@ -683,6 +854,7 @@ def annotate(
         str,
         Field(description="Position: named, percentage ('50%,30%'), or pixels ('100px,200px' or '100,200')")
     ] = "center",
+    target_text: Annotated[str | None, Field(description="Target text to automatically locate via OCR for exact pixel placement")] = None,
     text: Annotated[str | None, Field(description="Text content (for text/callout types)")] = None,
     width: Annotated[int | None, Field(description="Width in pixels")] = None,
     height: Annotated[int | None, Field(description="Height in pixels")] = None,
@@ -701,26 +873,21 @@ def annotate(
 ) -> AnnotationResult:
     """
     Smart unified annotation tool with flexible positioning and anchor support.
-
-    Position formats:
-    - Named: "top-left", "center", "bottom-right", "top-left-quarter", etc.
-    - Percentage: "50%, 30%" (from top-left corner)
-    - Pixels: "100px, 200px" or "100, 200" (absolute x, y)
-
-    Anchor controls which part of the annotation aligns to the position:
-    - "top-left": annotation's top-left corner at position
-    - "center": annotation's center at position (default)
-    - "bottom-right": annotation's bottom-right corner at position
-
-    Offset allows fine-tuning: offset_x=10 moves 10px right, offset_y=-5 moves 5px up.
-
-    Examples:
-    - annotate(img, "box", "50%,10%", width=200, height=50, anchor="top-center")
-    - annotate(img, "text", "100px,50px", text="Label", anchor="top-left", offset_x=5)
-    - annotate(img, "callout", "center", text="Note", offset_y=-20)
     """
     image = _get_image(image_id)
     img_w, img_h = image.size
+
+    # Auto-resolve target_text if provided
+    if target_text:
+        box = find_target_text_box(image, target_text)
+        if box:
+            position = f"{box.x + box.width // 2}, {box.y + box.height // 2}"
+            if width is None:
+                width = box.width + 12
+            if height is None:
+                height = box.height + 8
+            if radius is None:
+                radius = max(box.width, box.height) // 2 + 6
 
     # Calculate default sizes based on image
     default_width = max(100, img_w // 5)
