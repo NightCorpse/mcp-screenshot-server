@@ -240,7 +240,7 @@ def capture_screenshot(
     width: Annotated[int | None, Field(description="Width for region capture")] = None,
     height: Annotated[int | None, Field(description="Height for region capture")] = None,
     window_id: Annotated[int | None, Field(description="Window ID for window capture (macOS). Use 'osascript' or 'GetWindowID' to find window IDs.")] = None,
-    include_ocr: Annotated[bool, Field(description="Run Tesseract OCR to extract on-screen text coordinates")] = False,
+    include_ocr: Annotated[bool, Field(description="Run Tesseract OCR to extract on-screen text coordinates (enabled by default)")] = True,
 ) -> ScreenshotResult:
     """
     Capture a screenshot of the screen, a region, or a specific window.
@@ -320,7 +320,7 @@ def capture_screenshot(
 @mcp.tool()
 def load_image(
     path: Annotated[str, Field(description="Path to the image file to load")],
-    include_ocr: Annotated[bool, Field(description="Run Tesseract OCR to extract on-screen text coordinates")] = False,
+    include_ocr: Annotated[bool, Field(description="Run Tesseract OCR to extract on-screen text coordinates (enabled by default)")] = True,
 ) -> ScreenshotResult:
     """Load an existing image file for annotation."""
     path = os.path.expanduser(path)
