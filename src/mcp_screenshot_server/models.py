@@ -3,11 +3,33 @@
 from pydantic import BaseModel, Field
 
 
+class TextElement(BaseModel):
+    """Text element detected via OCR with bounding box coordinates."""
+    text: str = Field(description="Detected text content")
+    x: int = Field(description="X coordinate (left)")
+    y: int = Field(description="Y coordinate (top)")
+    width: int = Field(description="Width in pixels")
+    height: int = Field(description="Height in pixels")
+    confidence: float = Field(default=100.0, description="OCR confidence score (0-100)")
+
+
 class ScreenshotResult(BaseModel):
-    """Result of a screenshot capture."""
+    """Result of a screenshot capture or load operation."""
     image_id: str = Field(description="Unique identifier for the captured image")
     width: int = Field(description="Image width in pixels")
     height: int = Field(description="Image height in pixels")
+    message: str = Field(description="Status message")
+    detected_text: list[TextElement] = Field(
+        default_factory=list,
+        description="Text elements with bounding boxes detected via OCR"
+    )
+
+
+class OCRResult(BaseModel):
+    """Result of an OCR text detection operation."""
+    image_id: str = Field(description="Image ID that was analyzed")
+    count: int = Field(description="Number of detected text elements")
+    elements: list[TextElement] = Field(default_factory=list, description="List of detected text elements")
     message: str = Field(description="Status message")
 
 
