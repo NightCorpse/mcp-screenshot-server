@@ -393,3 +393,27 @@ class TestPositionParsing:
         assert x + 50 <= 400  # Width stays in bounds
         assert y + 30 <= 300  # Height stays in bounds
 
+
+class TestOCRTools:
+    """Test OCR extraction and text targeting tools."""
+
+    @pytest.fixture
+    def test_image(self):
+        """Create a test image for OCR."""
+        img = PILImage.new("RGB", (200, 200), color="white")
+        image_id = server._store_image(img)
+        return image_id
+
+    def test_extract_text_empty_image(self):
+        """Test OCR on empty image returns empty list gracefully."""
+        img = PILImage.new("RGB", (100, 100), color="white")
+        elements = server.extract_text_elements_from_image(img)
+        assert isinstance(elements, list)
+
+    def test_detect_text_tool(self, test_image):
+        """Test detect_text tool."""
+        res = server.detect_text(image_id=test_image)
+        assert res.image_id == test_image
+        assert isinstance(res.elements, list)
+
+
