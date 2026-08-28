@@ -114,6 +114,12 @@ mcp = FastMCP(
 
     ## Session Tools:
     - list_images, get_image, duplicate_image, delete_image
+
+    ## Final Result Delivery
+    After completing a capture, annotation, or editing workflow, call get_image with
+    the final image_id so the user can see the result in the chat. Use save_image,
+    quick_save, copy_to_clipboard, or open_in_preview instead when the user explicitly
+    requests one of those delivery methods.
     """,
 )
 
@@ -2468,7 +2474,7 @@ def configure_limits(
 def get_image(
     image_id: Annotated[str, Field(description="ID of the image to retrieve")]
 ) -> Image:
-    """Get a specific image by its ID. Returns the image data."""
+    """Display the final image in chat so the user can see the visual result."""
     if image_id not in _image_store:
         raise ValueError(f"Image '{image_id}' not found. Use list_images to see available images.")
 
