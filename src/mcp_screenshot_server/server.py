@@ -519,6 +519,25 @@ def find_monitor(monitors: list[MonitorInfo], query: int | str) -> MonitorInfo |
     return None
 
 
+def _normalize_monitor_capture(
+    image: PILImage.Image,
+    monitor: MonitorInfo,
+    raw_buffer: bool = False,
+) -> PILImage.Image:
+    """Resize a compositor buffer to the monitor's physical pixel resolution."""
+    if raw_buffer:
+        return image
+
+    scale = monitor.scale if monitor.scale and monitor.scale > 0 else 1.0
+    target_size = (
+        max(1, round(monitor.width * scale)),
+        max(1, round(monitor.height * scale)),
+    )
+    if image.size == target_size:
+        return image
+    return image.resize(target_size, PILImage.Resampling.LANCZOS)
+
+
 # =============================================================================
 # Screenshot Capture Tools
 # =============================================================================
@@ -563,6 +582,7 @@ def capture_screenshot(
     height: Annotated[int | None, Field(description="Height for region capture")] = None,
     window_id: Annotated[int | None, Field(description="Window ID for window capture (macOS). Use 'osascript' or 'GetWindowID' to find window IDs.")] = None,
     include_ocr: Annotated[bool, Field(description="Run Tesseract OCR to extract on-screen text coordinates (enabled by default)")] = True,
+    raw_buffer: Annotated[bool, Field(description="Keep the compositor's raw monitor buffer instead of normalizing to physical resolution")] = False,
 ) -> ScreenshotResult:
     """
     Capture a screenshot of a specific monitor, the entire desktop, a region, or a window.
@@ -627,6 +647,7 @@ def capture_screenshot(
                 scale_x = canvas.width / total_logical_w if total_logical_w > 0 else 1.0
                 scale_y = canvas.height / total_logical_h if total_logical_h > 0 else 1.0
 
+                captured_monitor = None
                 if mode == "region" and all(v is not None for v in [x, y, width, height]):
                     if target_mon is not None:
                         rx = int(round((target_mon.x + x) * scale_x))
@@ -646,6 +667,7 @@ def capture_screenshot(
                 elif target_mon is not None or mode == "monitor":
                     mon_to_grab = target_mon or (monitors[0] if monitors else None)
                     if mon_to_grab is not None:
+                        captured_monitor = mon_to_grab
                         cx = int(round(mon_to_grab.x * scale_x))
                         cy = int(round(mon_to_grab.y * scale_y))
                         cw = int(round(mon_to_grab.width * scale_x))
@@ -661,6 +683,8 @@ def capture_screenshot(
                     # Fullscreen / all monitors combined
                     screenshot = canvas
 
+                if captured_monitor is not None:
+                    screenshot = _normalize_monitor_capture(screenshot, captured_monitor, raw_buffer)
                 screenshot.save(tmp_path, "PNG")
             except Exception as e:
                 raise RuntimeError(f"Screenshot capture failed: {e}") from e
@@ -674,6 +698,7 @@ def capture_screenshot(
             detected_text = get_or_extract_ocr_elements(image_id, image)
 
         target_label = f" (Monitor: {target_mon.name})" if target_mon else ""
+        buffer_label = ", raw buffer" if raw_buffer and (target_mon or mode == "monitor") else ""
         return ScreenshotResult(
             image_id=image_id,
             width=image.width,
@@ -682,7 +707,7 @@ def capture_screenshot(
             suggested_font_sizes=_suggest_font_sizes(image),
             detected_text=detected_text,
             message=(
-                f"Screenshot captured successfully ({mode} mode{target_label}). "
+                f"Screenshot captured successfully ({mode} mode{target_label}{buffer_label}). "
                 "Suggested font sizes: "
                 + ", ".join(f"{name}={size}px" for name, size in _suggest_font_sizes(image).items())
             )

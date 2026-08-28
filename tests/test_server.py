@@ -703,6 +703,28 @@ class TestMultiMonitorTools:
         m_sub = server.find_monitor(monitors, "HDMI")
         assert m_sub is not None and m_sub.id == 2
 
+    def test_normalize_monitor_capture_to_physical_resolution(self):
+        """Downscale a supersampled compositor buffer to physical pixels."""
+        monitor = server.MonitorInfo(
+            id=1, name="HDMI-A-1", width=1536, height=864,
+            scale=1.25, is_primary=False,
+        )
+        raw = PILImage.new("RGB", (3072, 1728), color="white")
+
+        normalized = server._normalize_monitor_capture(raw, monitor)
+
+        assert normalized.size == (1920, 1080)
+
+    def test_normalize_monitor_capture_can_keep_raw_buffer(self):
+        """Preserve compositor pixels when raw_buffer is explicitly requested."""
+        monitor = server.MonitorInfo(
+            id=1, name="HDMI-A-1", width=1536, height=864,
+            scale=1.25, is_primary=False,
+        )
+        raw = PILImage.new("RGB", (3072, 1728), color="white")
+
+        assert server._normalize_monitor_capture(raw, monitor, raw_buffer=True) is raw
+
     def test_list_monitors_tool(self):
         """Test list_monitors tool."""
         res = server.list_monitors()
