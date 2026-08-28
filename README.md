@@ -99,15 +99,14 @@ Blur or redact sensitive information:
 ### Installation
 
 ```bash
-# Using pip
-pip install mcp-screenshot-server
-
-# Using uv (recommended)
-uv add mcp-screenshot-server
-
-# From source
-git clone https://github.com/aamar-shahzad/mcp-screenshot-server.git
+# Clone the repository
+git clone https://github.com/NightCorpse/mcp-screenshot-server.git
 cd mcp-screenshot-server
+
+# Install globally in an isolated environment using pipx (recommended)
+pipx install .
+
+# Or install in editable mode for local development
 pip install -e .
 ```
 
@@ -202,6 +201,42 @@ mcp-screenshot-server --transport sse --port 8000
      }
    }
    ```
+
+## Integration with OpenCode
+
+### Method 1: Install from Source with pipx (Recommended)
+
+1. **Clone and install using `pipx`**:
+
+   ```bash
+   git clone https://github.com/NightCorpse/mcp-screenshot-server.git
+   cd mcp-screenshot-server
+   pipx install .
+   ```
+
+   *(To update an existing installation later, run `pipx install --force .` from the repository directory).*
+
+2. **Add to OpenCode configuration** (`opencode.json` in your project or global `~/.config/opencode/opencode.json`):
+
+   ```json
+   {
+     "mcp": {
+       "screenshot": {
+         "type": "local",
+         "command": [
+           "mcp-screenshot-server"
+         ]
+       }
+     }
+   }
+   ```
+
+   > **Tip:** If `~/.local/bin` is not yet in your system `$PATH`, specify the full binary path:
+   > ```json
+   > "command": ["/home/<YOUR_USER>/.local/bin/mcp-screenshot-server"]
+   > ```
+
+3. **Restart OpenCode** or reload configuration to start using the tools.
 
 ## Available Tools
 
