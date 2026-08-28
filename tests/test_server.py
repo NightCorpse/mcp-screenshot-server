@@ -126,6 +126,169 @@ class TestAnnotationTools:
         assert result.image_id == test_image
         assert "Highlight added" in result.message
 
+    def test_preview_box_is_cropped_and_does_not_mutate_source(self, test_image):
+        """Preview a box with context without storing or changing an image."""
+        original_bytes = server._image_store[test_image]
+        original_ids = set(server._image_store)
+        original_history = list(server._image_history.get(test_image, []))
+
+        result = server.preview_annotation(
+            image_id=test_image,
+            annotation_type="box",
+            x=80,
+            y=90,
+            width=40,
+            height=20,
+            color="red",
+            line_width=2,
+            padding=10,
+            minimum_width=1,
+            minimum_height=1,
+        )
+
+        preview = PILImage.open(io.BytesIO(result.data)).convert("RGB")
+        assert preview.size == (65, 45)
+        assert preview.getpixel((12, 12)) == (255, 0, 0)
+        assert server._image_store[test_image] == original_bytes
+        assert set(server._image_store) == original_ids
+        assert server._image_history.get(test_image, []) == original_history
+
+    def test_preview_circle_clamps_crop_to_image_edges(self, test_image):
+        """Keep a circle preview valid when its context reaches an image edge."""
+        result = server.preview_annotation(
+            image_id=test_image,
+            annotation_type="circle",
+            x=20,
+            y=20,
+            radius=10,
+            color="blue",
+            line_width=2,
+            padding=30,
+            minimum_width=1,
+            minimum_height=1,
+        )
+
+        preview = PILImage.open(io.BytesIO(result.data)).convert("RGB")
+        assert preview.size == (85, 85)
+        assert preview.getpixel((20, 10)) == (0, 0, 255)
+
+    def test_preview_rejects_annotation_outside_image(self, test_image):
+        """Reject candidates whose preview has no intersection with the image."""
+        with pytest.raises(ValueError, match="outside the image"):
+            server.preview_annotation(
+                image_id=test_image,
+                annotation_type="box",
+                x=300,
+                y=300,
+                width=20,
+                height=20,
+                padding=10,
+            )
+
+    @pytest.mark.parametrize(
+        ("annotation_type", "kwargs"),
+        [
+            ("text", {"text": "Preview", "font_size": 18}),
+            ("arrow", {"x2": 140, "y2": 120}),
+            ("line", {"x2": 140, "y2": 120}),
+            ("highlight", {"width": 50, "height": 30, "opacity": 100}),
+            ("callout", {"text": "Target", "number": 3, "font_size": 18}),
+        ],
+    )
+    def test_preview_supports_remaining_annotation_types(self, test_image, annotation_type, kwargs):
+        """Return a contextual image for every precise annotation type."""
+        result = server.preview_annotation(
+            image_id=test_image,
+            annotation_type=annotation_type,
+            x=60,
+            y=70,
+            color="red",
+            padding=20,
+            **kwargs,
+        )
+
+        preview = PILImage.open(io.BytesIO(result.data))
+        assert preview.size == (200, 200)
+        assert preview.getbbox() is not None
+
+    def test_preview_callout_does_not_consume_number(self, test_image):
+        """Keep the global callout sequence unchanged while previewing."""
+        before = server.get_callout_counter()
+
+        server.preview_annotation(
+            image_id=test_image,
+            annotation_type="callout",
+            x=100,
+            y=100,
+        )
+
+        assert server.get_callout_counter() == before
+
+    @pytest.mark.parametrize(
+        ("annotation_type", "kwargs"),
+        [
+            ("box", {"width": 40, "height": 25}),
+            ("circle", {"radius": 18}),
+            ("text", {"text": "Same", "font_size": 18}),
+            ("arrow", {"x2": 145, "y2": 125}),
+            ("line", {"x2": 145, "y2": 125}),
+            ("highlight", {"width": 40, "height": 25, "opacity": 80}),
+            ("callout", {"text": "Same", "number": 4, "font_size": 18}),
+        ],
+    )
+    def test_preview_matches_precise_annotation(self, test_image, annotation_type, kwargs):
+        """Render identical pixels in the preview and definitive exact tool."""
+        preview_result = server.preview_annotation(
+            image_id=test_image,
+            annotation_type=annotation_type,
+            x=70,
+            y=80,
+            color="red",
+            line_width=3,
+            minimum_width=200,
+            minimum_height=200,
+            **kwargs,
+        )
+        preview = PILImage.open(io.BytesIO(preview_result.data)).convert("RGBA")
+
+        server.precise_annotate(
+            image_id=test_image,
+            annotation_type=annotation_type,
+            x=70,
+            y=80,
+            color="red",
+            line_width=3,
+            **kwargs,
+        )
+        definitive = server._get_image(test_image).convert("RGBA")
+
+        assert preview.size == definitive.size
+        assert preview.tobytes() == definitive.tobytes()
+
+    def test_preview_uses_minimum_context_without_changing_annotation_size(self, test_image):
+        """Provide a useful viewport around a small final annotation."""
+        result = server.preview_annotation(
+            image_id=test_image,
+            annotation_type="box",
+            x=90,
+            y=90,
+            width=10,
+            height=10,
+            padding=0,
+            minimum_width=120,
+            minimum_height=100,
+        )
+
+        preview = PILImage.open(io.BytesIO(result.data)).convert("RGB")
+        assert preview.size == (120, 100)
+        red_pixels = sum(
+            1
+            for py in range(preview.height)
+            for px in range(preview.width)
+            if preview.getpixel((px, py)) == (255, 0, 0)
+        )
+        assert red_pixels < 100
+
 
 class TestEditingTools:
     """Test editing tools."""
@@ -498,6 +661,3 @@ class TestMultiMonitorTools:
         """Test capturing screenshot of non-existent monitor raises ValueError."""
         with pytest.raises(ValueError, match="not found"):
             server.capture_screenshot(monitor=999)
-
-
-

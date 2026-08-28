@@ -212,6 +212,7 @@ These tools use flexible positioning and auto-adjustment for easier annotation:
 | ------------------ | --------------------------------------------- |
 | `annotate`         | Unified annotation with smart positioning     |
 | `precise_annotate` | **Pixel-perfect** annotations at exact coords |
+| `preview_annotation` | Preview exact placement without modifying the source |
 | `batch_annotate`   | Apply multiple annotations in ONE call        |
 | `label_regions`    | Quickly label multiple areas with one command |
 
@@ -238,6 +239,16 @@ annotate(img, "box", "830px, 195px", width=140, height=55,
 precise_annotate(img, "box", x=830, y=195, width=140, height=55, color="blue")
 precise_annotate(img, "text", x=830, y=168, text="Code Button", font_size=24)
 precise_annotate(img, "arrow", x=100, y=200, x2=300, y2=200, color="red")
+
+# Test placement in a transient contextual crop before changing the source.
+# Width/height define the final annotation; increase padding to inspect more context.
+preview_annotation(img, "box", x=830, y=195, width=140, height=55, padding=150)
+
+# Preview other exact annotation types with the same geometry used by precise_annotate
+preview_annotation(img, "arrow", x=500, y=300, x2=830, y2=195, padding=100)
+preview_annotation(img, "text", x=830, y=160, text="Code Button", font_size=24)
+preview_annotation(img, "highlight", x=830, y=195, width=140, height=55)
+preview_annotation(img, "callout", x=830, y=195, text="Click here")
 
 # Multiple annotations in one call
 batch_annotate(img, '[{"type":"box","position":"top-left"},{"type":"text","position":"center","text":"Hello"}]')

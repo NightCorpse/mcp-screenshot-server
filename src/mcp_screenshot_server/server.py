@@ -1,6 +1,7 @@
 """MCP Screenshot Server - Main server implementation."""
 
 import argparse
+import io
 import json
 import math
 import os
@@ -82,6 +83,11 @@ mcp = FastMCP(
     Example: annotate(img, "box", "top-left", width=200, color="blue")
     Example: annotate(img, "text", "center", text="Important!")
     Example: annotate(img, "arrow", "20%,50%", end_position="80%,50%")
+
+    ### preview_annotation - Test precise placement without modifying the image
+    Supports box, circle, text, arrow, line, highlight, and callout. Increase padding
+    to inspect a wider area; width/height always define the final annotation itself.
+    Refine coordinates in the contextual crop, then call precise_annotate with the same values.
 
     ### batch_annotate - Apply multiple annotations in ONE call
     Pass JSON array: [{"type":"box","position":"top-left"},{"type":"text","position":"center","text":"Hi"}]
@@ -1065,25 +1071,221 @@ class AnnotationSpec(BaseModel):
     font_size: int = Field(default=24, description="Font size for text")
 
 
+def _render_precise_annotation(
+    image: PILImage.Image,
+    annotation_type: Literal["box", "circle", "text", "arrow", "line", "highlight", "callout"],
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+    radius: int,
+    x2: int | None,
+    y2: int | None,
+    text: str | None,
+    color: str,
+    line_width: int,
+    font_size: int,
+    opacity: int,
+    number: int | None,
+) -> tuple[PILImage.Image, tuple[int, int, int, int], str]:
+    """Render an exact-coordinate annotation and return its bounds and message."""
+    draw = ImageDraw.Draw(image, "RGBA")
+    if annotation_type == "box":
+        if width <= 0 or height <= 0:
+            raise ValueError("width and height must be greater than zero for box type")
+        bounds = (x, y, x + width, y + height)
+        draw.rectangle(bounds, outline=color, width=line_width)
+        return image, bounds, f"Box at ({x}, {y}) size {width}x{height}"
+
+    if annotation_type == "circle":
+        if radius <= 0:
+            raise ValueError("radius must be greater than zero for circle type")
+        bounds = (x - radius, y - radius, x + radius, y + radius)
+        draw.ellipse(bounds, outline=color, width=line_width)
+        return image, bounds, f"Circle at ({x}, {y}) radius {radius}"
+
+    if annotation_type == "text":
+        if not text:
+            raise ValueError("text parameter required for text type")
+        font = _get_font(font_size)
+        text_bbox = draw.textbbox((x, y), text, font=font)
+        bounds = (text_bbox[0] - 4, text_bbox[1] - 4, text_bbox[2] + 4, text_bbox[3] + 4)
+        draw.rectangle(bounds, fill="white")
+        draw.text((x, y), text, fill=color, font=font)
+        return image, bounds, f"Text '{text}' at ({x}, {y})"
+
+    if annotation_type in ("arrow", "line"):
+        if x2 is None or y2 is None:
+            raise ValueError("x2 and y2 required for arrow/line type")
+        draw.line([(x, y), (x2, y2)], fill=color, width=line_width)
+        half_stroke = math.ceil(line_width / 2)
+        points: list[tuple[float, float]] = [(x, y), (x2, y2)]
+        if annotation_type == "arrow":
+            angle = math.atan2(y2 - y, x2 - x)
+            head_size = 15
+            left = (
+                x2 + head_size * math.cos(angle + math.pi * 0.85),
+                y2 + head_size * math.sin(angle + math.pi * 0.85),
+            )
+            right = (
+                x2 + head_size * math.cos(angle - math.pi * 0.85),
+                y2 + head_size * math.sin(angle - math.pi * 0.85),
+            )
+            draw.polygon([(x2, y2), left, right], fill=color)
+            points.extend((left, right))
+        bounds = (
+            math.floor(min(point[0] for point in points)) - half_stroke,
+            math.floor(min(point[1] for point in points)) - half_stroke,
+            math.ceil(max(point[0] for point in points)) + half_stroke,
+            math.ceil(max(point[1] for point in points)) + half_stroke,
+        )
+        label = "Arrow" if annotation_type == "arrow" else "Line"
+        return image, bounds, f"{label} from ({x}, {y}) to ({x2}, {y2})"
+
+    if annotation_type == "highlight":
+        if width <= 0 or height <= 0:
+            raise ValueError("width and height must be greater than zero for highlight type")
+        try:
+            rgb = ImageColor.getrgb(color)
+        except ValueError:
+            rgb = (255, 255, 0)
+        overlay = PILImage.new("RGBA", image.size, (0, 0, 0, 0))
+        ImageDraw.Draw(overlay).rectangle(
+            [x, y, x + width, y + height], fill=(*rgb, opacity)
+        )
+        rendered = PILImage.alpha_composite(image.convert("RGBA"), overlay)
+        bounds = (x, y, x + width, y + height)
+        return rendered, bounds, f"Highlight at ({x}, {y}) size {width}x{height}"
+
+    if number is None or number <= 0:
+        raise ValueError("number must be greater than zero for callout type")
+    callout_radius = max(15, font_size // 2 + 5)
+    bounds = [x - callout_radius, y - callout_radius, x + callout_radius, y + callout_radius]
+    draw.ellipse(bounds, fill=color, outline="white", width=2)
+    font = _get_font(font_size)
+    number_text = str(number)
+    number_bbox = draw.textbbox((0, 0), number_text, font=font)
+    number_width = number_bbox[2] - number_bbox[0]
+    number_height = number_bbox[3] - number_bbox[1]
+    number_position = (x - number_width // 2, y - number_height // 2 - 2)
+    draw.text(number_position, number_text, fill="white", font=font)
+    drawn_number_bbox = draw.textbbox(number_position, number_text, font=font)
+    bounds = [
+        min(bounds[0], drawn_number_bbox[0]),
+        min(bounds[1], drawn_number_bbox[1]),
+        max(bounds[2], drawn_number_bbox[2]),
+        max(bounds[3], drawn_number_bbox[3]),
+    ]
+    if text:
+        label_position = (x + callout_radius + 5, y - number_height // 2)
+        draw.text(label_position, text, fill=color, font=font)
+        label_bbox = draw.textbbox(label_position, text, font=font)
+        bounds = [
+            min(bounds[0], label_bbox[0]),
+            min(bounds[1], label_bbox[1]),
+            max(bounds[2], label_bbox[2]),
+            max(bounds[3], label_bbox[3]),
+        ]
+    message = f"Callout #{number} at ({x}, {y})" + (f" '{text}'" if text else "")
+    return image, tuple(bounds), message
+
+
+def _preview_crop_box(
+    bounds: tuple[int, int, int, int],
+    image_size: tuple[int, int],
+    padding: int,
+    line_width: int,
+    minimum_width: int,
+    minimum_height: int,
+) -> tuple[int, int, int, int]:
+    """Expand annotation bounds into a contextual crop clamped to the image."""
+    left, top, right, bottom = bounds
+    image_width, image_height = image_size
+    if right < 0 or bottom < 0 or left >= image_width or top >= image_height:
+        raise ValueError("Annotation is outside the image and cannot be previewed")
+
+    crop_left = left - padding - line_width
+    crop_top = top - padding - line_width
+    crop_right = right + padding + line_width + 1
+    crop_bottom = bottom + padding + line_width + 1
+
+    target_width = min(image_width, max(minimum_width, crop_right - crop_left))
+    target_height = min(image_height, max(minimum_height, crop_bottom - crop_top))
+    center_x = (left + right) // 2
+    center_y = (top + bottom) // 2
+    crop_left = max(0, min(center_x - target_width // 2, image_width - target_width))
+    crop_top = max(0, min(center_y - target_height // 2, image_height - target_height))
+    return (crop_left, crop_top, crop_left + target_width, crop_top + target_height)
+
+
+@mcp.tool()
+def preview_annotation(
+    image_id: Annotated[str, Field(description="ID of the source image")],
+    annotation_type: Annotated[
+        Literal["box", "circle", "text", "arrow", "line", "highlight", "callout"],
+        Field(description="Type of annotation to preview")
+    ],
+    x: Annotated[int, Field(description="Global start/anchor X coordinate on the source image")],
+    y: Annotated[int, Field(description="Global start/anchor Y coordinate on the source image")],
+    text: Annotated[str | None, Field(description="Text content for text or callout types")] = None,
+    width: Annotated[int, Field(description="Final box/highlight width; increase padding, not width, to see more context", gt=0)] = 100,
+    height: Annotated[int, Field(description="Final box/highlight height; increase padding, not height, to see more context", gt=0)] = 50,
+    radius: Annotated[int, Field(description="Circle radius in pixels", gt=0)] = 30,
+    x2: Annotated[int | None, Field(description="Global end X coordinate for arrow or line")] = None,
+    y2: Annotated[int | None, Field(description="Global end Y coordinate for arrow or line")] = None,
+    color: Annotated[str, Field(description="Color name or hex value")] = "red",
+    line_width: Annotated[int, Field(description="Line/border width", gt=0)] = 3,
+    font_size: Annotated[int, Field(description="Font size for text or callout", gt=0)] = 24,
+    opacity: Annotated[int, Field(description="Highlight opacity", ge=0, le=255)] = 100,
+    number: Annotated[int | None, Field(description="Callout number; defaults to the next number without consuming it", gt=0)] = None,
+    padding: Annotated[int, Field(description="Context around the final annotation. Increase this to search a wider area; do not enlarge width/height", ge=0)] = 100,
+    minimum_width: Annotated[int, Field(description="Minimum preview viewport width", gt=0)] = 320,
+    minimum_height: Annotated[int, Field(description="Minimum preview viewport height", gt=0)] = 240,
+) -> Image:
+    """
+    Preview a candidate annotation in a cropped view without changing the source image.
+
+    All coordinates refer to the original image. Width, height, and radius describe
+    the final annotation only. Increase padding to inspect a wider surrounding area.
+    Call repeatedly to refine placement, then use precise_annotate with the same values.
+    """
+    source = _get_image(image_id)
+    preview = source.convert("RGBA")
+    preview, bounds, _ = _render_precise_annotation(
+        preview, annotation_type, x, y, width, height, radius, x2, y2, text,
+        color, line_width, font_size, opacity,
+        number if number is not None else get_callout_counter() + 1,
+    )
+    crop_box = _preview_crop_box(
+        bounds, preview.size, padding, line_width, minimum_width, minimum_height
+    )
+
+    buffer = io.BytesIO()
+    preview.crop(crop_box).save(buffer, format="PNG")
+    return Image(data=buffer.getvalue(), format="png")
+
+
 @mcp.tool()
 def precise_annotate(
     image_id: Annotated[str, Field(description="ID of the image to annotate")],
     annotation_type: Annotated[
-        Literal["box", "circle", "text", "arrow", "line"],
+        Literal["box", "circle", "text", "arrow", "line", "highlight", "callout"],
         Field(description="Type of annotation")
     ],
     x: Annotated[int | None, Field(description="X coordinate in pixels (from left edge)")] = None,
     y: Annotated[int | None, Field(description="Y coordinate in pixels (from top edge)")] = None,
     target_text: Annotated[str | None, Field(description="Auto-target a UI element by text using Tesseract OCR")] = None,
-    text: Annotated[str | None, Field(description="Text content (for text type)")] = None,
-    width: Annotated[int | None, Field(description="Width in pixels (for box)")] = None,
-    height: Annotated[int | None, Field(description="Height in pixels (for box)")] = None,
+    text: Annotated[str | None, Field(description="Text content for text or callout types")] = None,
+    width: Annotated[int | None, Field(description="Width in pixels for box or highlight")] = None,
+    height: Annotated[int | None, Field(description="Height in pixels for box or highlight")] = None,
     radius: Annotated[int | None, Field(description="Radius in pixels (for circle)")] = None,
     x2: Annotated[int | None, Field(description="End X coordinate (for arrow/line)")] = None,
     y2: Annotated[int | None, Field(description="End Y coordinate (for arrow/line)")] = None,
     color: Annotated[str, Field(description="Color (name or hex)")] = "red",
     line_width: Annotated[int, Field(gt=0, description="Line/border width")] = 3,
-    font_size: Annotated[int, Field(gt=0, description="Font size for text")] = 24,
+    font_size: Annotated[int, Field(gt=0, description="Font size for text or callout")] = 24,
+    opacity: Annotated[int, Field(ge=0, le=255, description="Opacity for highlight type")] = 100,
+    number: Annotated[int | None, Field(gt=0, description="Explicit number for callout type")] = None,
 ) -> AnnotationResult:
     """
     Pixel-perfect annotation tool. Places annotations at EXACT pixel coordinates
@@ -1126,53 +1328,13 @@ def precise_annotate(
     height = 50 if height is None else height
     radius = 30 if radius is None else radius
 
-    draw = ImageDraw.Draw(image, "RGBA")
-    message = ""
-
-    if annotation_type == "box":
-        draw.rectangle([x, y, x + width, y + height], outline=color, width=line_width)
-        message = f"Box at ({x}, {y}) size {width}x{height}"
-
-    elif annotation_type == "circle":
-        circle_bbox = [x - radius, y - radius, x + radius, y + radius]
-        draw.ellipse(circle_bbox, outline=color, width=line_width)
-        message = f"Circle at ({x}, {y}) radius {radius}"
-
-    elif annotation_type == "text":
-        if not text:
-            raise ValueError("text parameter required for text type")
-        font = _get_font(font_size)
-        # Add background for readability
-        text_bbox = draw.textbbox((x, y), text, font=font)
-        padding = 4
-        draw.rectangle(
-            [text_bbox[0] - padding, text_bbox[1] - padding, text_bbox[2] + padding, text_bbox[3] + padding],
-            fill="white"
-        )
-        draw.text((x, y), text, fill=color, font=font)
-        message = f"Text '{text}' at ({x}, {y})"
-
-    elif annotation_type == "arrow":
-        if x2 is None or y2 is None:
-            raise ValueError("x2 and y2 required for arrow type")
-        draw.line([(x, y), (x2, y2)], fill=color, width=line_width)
-        # Draw arrowhead
-        angle = math.atan2(y2 - y, x2 - x)
-        head_size = 15
-        left_angle = angle + math.pi * 0.85
-        right_angle = angle - math.pi * 0.85
-        left_x = x2 + head_size * math.cos(left_angle)
-        left_y = y2 + head_size * math.sin(left_angle)
-        right_x = x2 + head_size * math.cos(right_angle)
-        right_y = y2 + head_size * math.sin(right_angle)
-        draw.polygon([(x2, y2), (left_x, left_y), (right_x, right_y)], fill=color)
-        message = f"Arrow from ({x}, {y}) to ({x2}, {y2})"
-
-    elif annotation_type == "line":
-        if x2 is None or y2 is None:
-            raise ValueError("x2 and y2 required for line type")
-        draw.line([(x, y), (x2, y2)], fill=color, width=line_width)
-        message = f"Line from ({x}, {y}) to ({x2}, {y2})"
+    callout_number = number
+    if annotation_type == "callout" and callout_number is None:
+        callout_number = get_next_callout_number()
+    image, _, message = _render_precise_annotation(
+        image, annotation_type, x, y, width, height, radius, x2, y2, text,
+        color, line_width, font_size, opacity, callout_number,
+    )
 
     _store_image(image, image_id)
     return AnnotationResult(image_id=image_id, message=message)
@@ -2663,4 +2825,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
