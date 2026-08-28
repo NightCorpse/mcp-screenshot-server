@@ -4,6 +4,7 @@ import argparse
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -120,7 +121,7 @@ _ocr_cache: dict[str, list[TextElement]] = {}
 def extract_text_elements_from_image(
     image: PILImage.Image,
     query: str | None = None,
-    min_confidence: float = 30.0
+    min_confidence: float = 0.0
 ) -> list[TextElement]:
     """
     Run Tesseract OCR on a PIL image to extract text elements with bounding boxes.
@@ -190,8 +191,12 @@ def extract_text_elements_from_image(
                 )
 
         if query:
-            q = query.lower().strip()
-            elements = [el for el in elements if q in el.text.lower()]
+            clean_q = re.sub(r"[^a-zA-Z0-9]", "", query).lower().strip()
+            if clean_q:
+                elements = [
+                    el for el in elements
+                    if clean_q in re.sub(r"[^a-zA-Z0-9]", "", el.text).lower()
+                ]
 
         return elements
     except Exception:
@@ -230,15 +235,35 @@ def find_target_text_box(
     if not elements or not target_text:
         return None
 
-    query = target_text.lower().strip()
-    # 1. Exact match
+    clean_q = re.sub(r"[^a-zA-Z0-9]", "", target_text).lower().strip()
+    if not clean_q:
+        return None
+
+    # Helper for clean text
+    def clean(text: str) -> str:
+        return re.sub(r"[^a-zA-Z0-9]", "", text).lower().strip()
+
+    # 1. Exact clean match (e.g. "watch" == "watch")
     for el in elements:
-        if el.text.lower() == query:
+        if clean(el.text) == clean_q:
             return el
 
-    # 2. Substring match
+    # 2. Starts with query (e.g. "fork0" starts with "fork")
     for el in elements:
-        if query in el.text.lower() or el.text.lower() in query:
+        c = clean(el.text)
+        if c and c.startswith(clean_q):
+            return el
+
+    # 3. Substring match (e.g. "pullrequests" contains "pull")
+    for el in elements:
+        c = clean(el.text)
+        if c and clean_q in c:
+            return el
+
+    # 4. Reverse containment (e.g. query contains element)
+    for el in elements:
+        c = clean(el.text)
+        if c and len(c) >= 3 and c in clean_q:
             return el
 
     return None
