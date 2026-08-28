@@ -265,6 +265,10 @@ For the most accurate annotations, combine with vision-capable AI models:
 | `capture_screenshot` | Capture full screen, specific monitor (`monitor=1` or `name`), region, window |
 | `load_image`         | Load an existing image file for annotation                                   |
 
+Monitor captures are normalized to the display's physical pixel resolution when
+fractional scaling produces a supersampled compositor buffer. Pass
+`raw_buffer=True` to preserve the original compositor buffer instead.
+
 ### Basic Annotation Tools (for pixel-precise control)
 
 | Tool                   | Description                             |
