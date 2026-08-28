@@ -113,6 +113,9 @@ _get_image = storage_get_image
 _image_to_base64 = image_to_base64
 _get_font = get_font
 
+# In-memory cache for OCR results per image_id
+_ocr_cache: dict[str, list[TextElement]] = {}
+
 
 def extract_text_elements_from_image(
     image: PILImage.Image,
@@ -201,12 +204,29 @@ def extract_text_elements_from_image(
                 pass
 
 
+def get_or_extract_ocr_elements(
+    image_id: str,
+    image: PILImage.Image | None = None
+) -> list[TextElement]:
+    """Retrieve cached OCR text elements or extract once and cache."""
+    if image_id in _ocr_cache:
+        return _ocr_cache[image_id]
+
+    if image is None:
+        image = _get_image(image_id)
+
+    elements = extract_text_elements_from_image(image)
+    _ocr_cache[image_id] = elements
+    return elements
+
+
 def find_target_text_box(
-    image: PILImage.Image,
-    target_text: str
+    image_id: str,
+    target_text: str,
+    image: PILImage.Image | None = None
 ) -> TextElement | None:
     """Find the best matching bounding box for target_text on the image."""
-    elements = extract_text_elements_from_image(image)
+    elements = get_or_extract_ocr_elements(image_id, image)
     if not elements or not target_text:
         return None
 
@@ -301,7 +321,7 @@ def capture_screenshot(
 
         detected_text = []
         if include_ocr:
-            detected_text = extract_text_elements_from_image(image)
+            detected_text = get_or_extract_ocr_elements(image_id, image)
 
         return ScreenshotResult(
             image_id=image_id,
@@ -333,7 +353,7 @@ def load_image(
 
     detected_text = []
     if include_ocr:
-        detected_text = extract_text_elements_from_image(image)
+        detected_text = get_or_extract_ocr_elements(image_id, image)
 
     return ScreenshotResult(
         image_id=image_id,
@@ -763,7 +783,7 @@ def precise_annotate(
 
     # Auto-resolve target_text if provided
     if target_text:
-        box = find_target_text_box(image, target_text)
+        box = find_target_text_box(image_id, target_text, image)
         if box:
             if annotation_type == "box":
                 pad = 4
@@ -879,7 +899,7 @@ def annotate(
 
     # Auto-resolve target_text if provided
     if target_text:
-        box = find_target_text_box(image, target_text)
+        box = find_target_text_box(image_id, target_text, image)
         if box:
             position = f"{box.x + box.width // 2}, {box.y + box.height // 2}"
             if width is None:
