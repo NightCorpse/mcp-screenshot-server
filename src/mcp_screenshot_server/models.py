@@ -40,8 +40,12 @@ class ScreenshotResult(BaseModel):
     width: int = Field(description="Image width in pixels")
     height: int = Field(description="Image height in pixels")
     suggested_font_size: int = Field(
-        default=24,
-        description="Recommended annotation font size for this image resolution"
+        default=18,
+        description="Recommended regular annotation font size for this image resolution"
+    )
+    suggested_font_sizes: dict[str, int] = Field(
+        default_factory=lambda: {"small": 15, "regular": 18, "large": 24},
+        description="Recommended small, regular, and large annotation font sizes"
     )
     message: str = Field(description="Status message")
     detected_text: list[TextElement] = Field(

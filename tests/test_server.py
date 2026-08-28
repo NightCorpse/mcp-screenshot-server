@@ -67,7 +67,7 @@ class TestImageStorage:
 
     @pytest.mark.parametrize(
         ("height", "expected"),
-        [(720, 16), (1080, 24), (2134, 47), (2160, 48)],
+        [(720, 14), (1080, 18), (1600, 27), (2160, 36)],
     )
     def test_suggest_font_size_scales_with_image_height(self, height, expected):
         """Recommend readable text across common screenshot resolutions."""
@@ -80,8 +80,9 @@ class TestImageStorage:
             PILImage.new("RGB", (800, 1350), color="white").save(tmp.name)
             result = server.load_image(tmp.name, include_ocr=False)
 
-        assert result.suggested_font_size == 30
-        assert "30px" in result.message
+        assert result.suggested_font_size == 22
+        assert result.suggested_font_sizes == {"small": 19, "regular": 22, "large": 30}
+        assert "small=19px, regular=22px, large=30px" in result.message
 
     def test_default_font_fallback_preserves_requested_size(self, monkeypatch):
         """Keep font scaling effective when no system font path exists."""
@@ -157,7 +158,24 @@ class TestAnnotationTools:
         server.add_text(automatic_id, 20, 20, "Scaled", color="black")
         server.add_text(explicit_id, 20, 20, "Scaled", color="black", font_size=18)
 
-        assert observed_sizes == [30, 18]
+        assert observed_sizes == [22, 18]
+
+    @pytest.mark.parametrize(
+        ("preset", "expected"),
+        [("small", 15), ("regular", 18), ("large", 24), (None, 18), (31, 31)],
+    )
+    def test_resolve_font_size_supports_presets_and_exact_pixels(self, preset, expected):
+        """Resolve semantic presets without changing explicit pixel values."""
+        image = PILImage.new("RGB", (1920, 1080), color="white")
+        assert server._resolve_font_size(image, preset) == expected
+
+    def test_resolve_font_size_rejects_invalid_values(self):
+        """Reject unsupported presets and non-positive exact sizes."""
+        image = PILImage.new("RGB", (1920, 1080), color="white")
+        with pytest.raises(ValueError, match="small, regular, large"):
+            server._resolve_font_size(image, "huge")
+        with pytest.raises(ValueError, match="greater than zero"):
+            server._resolve_font_size(image, 0)
 
     def test_add_highlight(self, test_image):
         """Test adding a highlight region."""

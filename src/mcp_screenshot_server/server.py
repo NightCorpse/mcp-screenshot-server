@@ -87,6 +87,7 @@ mcp = FastMCP(
     ### preview_annotation - Test precise placement without modifying the image
     Supports box, circle, text, arrow, line, highlight, and callout. Increase padding
     to inspect a wider area; width/height always define the final annotation itself.
+    For text, omit font_size for regular, use small/regular/large, or pass exact pixels.
     Refine coordinates in the contextual crop, then call precise_annotate with the same values.
 
     ### batch_annotate - Apply multiple annotations in ONE call
@@ -124,9 +125,35 @@ _image_to_base64 = image_to_base64
 _get_font = get_font
 
 
+FontSize = int | Literal["small", "regular", "large"] | None
+
+
+def _suggest_font_sizes(image: PILImage.Image) -> dict[str, int]:
+    """Recommend semantic annotation text sizes relative to image height."""
+    return {
+        "small": max(12, round(image.height / 70)),
+        "regular": max(14, round(image.height / 60)),
+        "large": max(16, round(image.height / 45)),
+    }
+
+
 def _suggest_font_size(image: PILImage.Image) -> int:
-    """Recommend readable annotation text relative to image height."""
-    return max(16, round(image.height / 45))
+    """Return the default regular annotation font size."""
+    return _suggest_font_sizes(image)["regular"]
+
+
+def _resolve_font_size(image: PILImage.Image, font_size: FontSize) -> int:
+    """Resolve a semantic preset while preserving explicit pixel values."""
+    if font_size is None:
+        return _suggest_font_size(image)
+    if isinstance(font_size, int):
+        if font_size <= 0:
+            raise ValueError("font_size must be greater than zero")
+        return font_size
+    presets = _suggest_font_sizes(image)
+    if font_size not in presets:
+        raise ValueError("font_size must be a positive integer or small, regular, large")
+    return presets[font_size]
 
 
 # In-memory cache for OCR results per image_id
@@ -652,10 +679,12 @@ def capture_screenshot(
             width=image.width,
             height=image.height,
             suggested_font_size=_suggest_font_size(image),
+            suggested_font_sizes=_suggest_font_sizes(image),
             detected_text=detected_text,
             message=(
                 f"Screenshot captured successfully ({mode} mode{target_label}). "
-                f"Suggested annotation font size: {_suggest_font_size(image)}px"
+                "Suggested font sizes: "
+                + ", ".join(f"{name}={size}px" for name, size in _suggest_font_sizes(image).items())
             )
         )
 
@@ -691,8 +720,12 @@ def load_image(
         width=image.width,
         height=image.height,
         suggested_font_size=_suggest_font_size(image),
+        suggested_font_sizes=_suggest_font_sizes(image),
         detected_text=detected_text,
-        message=f"Image loaded from {path}. Suggested annotation font size: {_suggest_font_size(image)}px"
+        message=(
+            f"Image loaded from {path}. Suggested font sizes: "
+            + ", ".join(f"{name}={size}px" for name, size in _suggest_font_sizes(image).items())
+        )
     )
 
 
@@ -834,13 +867,13 @@ def add_text(
     y: Annotated[int, Field(description="Y coordinate for the text")],
     text: Annotated[str, Field(description="The text to add")],
     color: Annotated[str, Field(description="Color of the text")] = "red",
-    font_size: Annotated[int | None, Field(gt=0, description="Font size; auto-scales to the image when omitted")] = None,
+    font_size: Annotated[FontSize, Field(description="Font size in pixels or preset: small, regular, large; defaults to regular")] = None,
     background: Annotated[str | None, Field(description="Background color for the text")] = None,
 ) -> AnnotationResult:
     """Add text annotation to the image."""
     image = _get_image(image_id)
     draw = ImageDraw.Draw(image)
-    font_size = font_size if font_size is not None else _suggest_font_size(image)
+    font_size = _resolve_font_size(image, font_size)
 
     font = _get_font(font_size)
 
@@ -1080,7 +1113,7 @@ class AnnotationSpec(BaseModel):
     end_position: str | None = Field(default=None, description="End position for arrow/line")
     color: str = Field(default="red", description="Color")
     line_width: int = Field(default=3, description="Line width")
-    font_size: int = Field(default=24, description="Font size for text")
+    font_size: int | Literal["small", "regular", "large"] | None = Field(default=None, description="Font size in pixels or semantic preset")
 
 
 def _render_precise_annotation(
@@ -1247,7 +1280,7 @@ def preview_annotation(
     y2: Annotated[int | None, Field(description="Global end Y coordinate for arrow or line")] = None,
     color: Annotated[str, Field(description="Color name or hex value")] = "red",
     line_width: Annotated[int, Field(description="Line/border width", gt=0)] = 3,
-    font_size: Annotated[int | None, Field(description="Font size for text or callout; auto-scales to the image when omitted", gt=0)] = None,
+    font_size: Annotated[FontSize, Field(description="Font size in pixels or preset: small, regular, large; defaults to regular")] = None,
     opacity: Annotated[int, Field(description="Highlight opacity", ge=0, le=255)] = 100,
     number: Annotated[int | None, Field(description="Callout number; defaults to the next number without consuming it", gt=0)] = None,
     padding: Annotated[int, Field(description="Context around the final annotation. Increase this to search a wider area; do not enlarge width/height", ge=0)] = 100,
@@ -1263,7 +1296,7 @@ def preview_annotation(
     """
     source = _get_image(image_id)
     preview = source.convert("RGBA")
-    font_size = font_size if font_size is not None else _suggest_font_size(source)
+    font_size = _resolve_font_size(source, font_size)
     preview, bounds, _ = _render_precise_annotation(
         preview, annotation_type, x, y, width, height, radius, x2, y2, text,
         color, line_width, font_size, opacity,
@@ -1296,7 +1329,7 @@ def precise_annotate(
     y2: Annotated[int | None, Field(description="End Y coordinate (for arrow/line)")] = None,
     color: Annotated[str, Field(description="Color (name or hex)")] = "red",
     line_width: Annotated[int, Field(gt=0, description="Line/border width")] = 3,
-    font_size: Annotated[int | None, Field(gt=0, description="Font size for text or callout; auto-scales to the image when omitted")] = None,
+    font_size: Annotated[FontSize, Field(description="Font size in pixels or preset: small, regular, large; defaults to regular")] = None,
     opacity: Annotated[int, Field(ge=0, le=255, description="Opacity for highlight type")] = 100,
     number: Annotated[int | None, Field(gt=0, description="Explicit number for callout type")] = None,
 ) -> AnnotationResult:
@@ -1310,7 +1343,7 @@ def precise_annotate(
     - target_text: Automatically finds text on screen and aligns the annotation
     """
     image = _get_image(image_id)
-    font_size = font_size if font_size is not None else _suggest_font_size(image)
+    font_size = _resolve_font_size(image, font_size)
 
     # Auto-resolve target_text if provided
     if target_text:
@@ -1373,7 +1406,7 @@ def annotate(
     end_position: Annotated[str | None, Field(description="End position for arrows/lines")] = None,
     color: Annotated[str, Field(description="Color")] = "red",
     line_width: Annotated[int, Field(gt=0, description="Line width")] = 3,
-    font_size: Annotated[int | None, Field(gt=0, description="Font size for text/callout; auto-scales to the image when omitted")] = None,
+    font_size: Annotated[FontSize, Field(description="Font size in pixels or preset: small, regular, large; defaults to regular")] = None,
     anchor: Annotated[
         str,
         Field(description="Anchor point: which part of element aligns to position (top-left, center, bottom-right, etc.)")
@@ -1387,7 +1420,7 @@ def annotate(
     """
     image = _get_image(image_id)
     img_w, img_h = image.size
-    font_size = font_size if font_size is not None else _suggest_font_size(image)
+    font_size = _resolve_font_size(image, font_size)
 
     # Auto-resolve target_text if provided
     if target_text:
@@ -2111,12 +2144,12 @@ def add_watermark(
         Field(description="Position of the watermark")
     ] = "bottom-right",
     opacity: Annotated[int, Field(ge=0, le=255, description="Opacity (0-255)")] = 128,
-    font_size: Annotated[int | None, Field(gt=0, description="Font size; auto-scales to the image when omitted")] = None,
+    font_size: Annotated[FontSize, Field(description="Font size in pixels or preset: small, regular, large; defaults to regular")] = None,
     color: Annotated[str, Field(description="Text color")] = "#ffffff",
 ) -> AnnotationResult:
     """Add a text watermark to the image."""
     image = _get_image(image_id).convert("RGBA")
-    font_size = font_size if font_size is not None else _suggest_font_size(image)
+    font_size = _resolve_font_size(image, font_size)
 
     # Create watermark layer
     watermark = PILImage.new("RGBA", image.size, (0, 0, 0, 0))
