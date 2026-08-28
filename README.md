@@ -257,12 +257,13 @@ For the most accurate annotations, combine with vision-capable AI models:
 4. Result: pixel-perfect annotations every time
 ```
 
-### Screenshot Capture
+### Screenshot Capture & Multi-Monitor
 
-| Tool                 | Description                                        |
-| -------------------- | -------------------------------------------------- |
-| `capture_screenshot` | Capture full screen, region, or window screenshots |
-| `load_image`         | Load an existing image file for annotation         |
+| Tool                 | Description                                                                  |
+| -------------------- | ---------------------------------------------------------------------------- |
+| `list_monitors`      | **NEW!** List connected displays with IDs, names, resolutions, and offsets   |
+| `capture_screenshot` | Capture full screen, specific monitor (`monitor=1` or `name`), region, window |
+| `load_image`         | Load an existing image file for annotation                                   |
 
 ### Basic Annotation Tools (for pixel-precise control)
 

@@ -5,6 +5,7 @@ import json
 import math
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -28,6 +29,8 @@ from .models import (
     ImageInfo,
     ImageListResult,
     MemoryStatsResult,
+    MonitorInfo,
+    MonitorListResult,
     OCRResult,
     PreviewResult,
     SaveResult,
@@ -270,16 +273,251 @@ def find_target_text_box(
 
 
 # =============================================================================
+# Multi-Monitor Detection & Management
+# =============================================================================
+
+
+def _strip_ansi(text: str) -> str:
+    """Remove ANSI escape sequences from CLI outputs."""
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+
+def detect_linux_monitors() -> list[MonitorInfo]:
+    """
+    Detect connected monitors on Linux using available system utilities (kscreen-doctor, hyprctl, xrandr, etc.).
+    Returns a list of MonitorInfo objects with logical geometry, resolution, offsets, and primary status.
+    """
+    monitors: list[MonitorInfo] = []
+
+    # 1. KDE Plasma (Wayland) via kscreen-doctor
+    try:
+        res = subprocess.run(
+            ["kscreen-doctor", "-o"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if res.returncode == 0:
+            clean_text = _strip_ansi(res.stdout)
+            output_blocks = re.split(r"(?:^|\n)(?=Output:\s*\d+)", clean_text)
+            for block in output_blocks:
+                if not block.strip().startswith("Output:"):
+                    continue
+                m_head = re.search(r"Output:\s*(\d+)\s+([^\s]+)", block)
+                if not m_head or "enabled" not in block:
+                    continue
+                name = m_head.group(2)
+                is_primary = "priority 1" in block or "primary" in block
+                m_geom = re.search(r"Geometry:\s*(\d+),(\d+)\s+(\d+)x(\d+)", block)
+                m_scale = re.search(r"Scale:\s*([0-9\.]+)", block)
+                scale = float(m_scale.group(1)) if m_scale else 1.0
+
+                if m_geom:
+                    x = int(m_geom.group(1))
+                    y = int(m_geom.group(2))
+                    width = int(m_geom.group(3))
+                    height = int(m_geom.group(4))
+                else:
+                    continue
+
+                monitors.append(
+                    MonitorInfo(
+                        id=len(monitors) + 1,
+                        name=name,
+                        width=width,
+                        height=height,
+                        x=x,
+                        y=y,
+                        is_primary=is_primary,
+                        scale=scale,
+                    )
+                )
+    except Exception:
+        pass
+
+    # 2. Hyprland (Wayland) via hyprctl
+    if not monitors:
+        try:
+            res = subprocess.run(
+                ["hyprctl", "monitors", "-j"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if res.returncode == 0:
+                data = json.loads(res.stdout)
+                for item in data:
+                    s = float(item.get("scale", 1.0))
+                    w = int(item.get("width", 1920) / (s if s > 0 else 1.0))
+                    h = int(item.get("height", 1080) / (s if s > 0 else 1.0))
+                    monitors.append(
+                        MonitorInfo(
+                            id=len(monitors) + 1,
+                            name=str(item.get("name", f"Display-{len(monitors) + 1}")),
+                            width=w,
+                            height=h,
+                            x=int(item.get("x", 0)),
+                            y=int(item.get("y", 0)),
+                            is_primary=bool(item.get("focused", False)),
+                            scale=s,
+                        )
+                    )
+        except Exception:
+            pass
+
+    # 3. Standard X11 / XWayland via xrandr --listmonitors
+    if not monitors:
+        try:
+            res = subprocess.run(
+                ["xrandr", "--listmonitors"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if res.returncode == 0:
+                clean_text = _strip_ansi(res.stdout)
+                pattern = re.compile(
+                    r"^\s*(\d+):\s+([\+\*]*)([^\s]+)\s+(\d+)/\d+x(\d+)/\d+\+(\d+)\+(\d+)\s+([^\s]+)",
+                    re.MULTILINE
+                )
+                for m in pattern.finditer(clean_text):
+                    idx = int(m.group(1)) + 1
+                    flags = m.group(2)
+                    is_primary = "*" in flags or (m.group(3) and "*" in m.group(3))
+                    width = int(m.group(4))
+                    height = int(m.group(5))
+                    x = int(m.group(6))
+                    y = int(m.group(7))
+                    name = m.group(8)
+                    monitors.append(
+                        MonitorInfo(
+                            id=idx,
+                            name=name,
+                            width=width,
+                            height=height,
+                            x=x,
+                            y=y,
+                            is_primary=is_primary,
+                            scale=1.0,
+                        )
+                    )
+        except Exception:
+            pass
+
+    # 4. Final fallback: Use PIL virtual canvas
+    if not monitors:
+        try:
+            from PIL import ImageGrab
+            v_img = ImageGrab.grab()
+            monitors.append(
+                MonitorInfo(
+                    id=1,
+                    name="Default Display",
+                    width=v_img.width,
+                    height=v_img.height,
+                    x=0,
+                    y=0,
+                    is_primary=True,
+                    scale=1.0,
+                )
+            )
+        except Exception:
+            monitors.append(
+                MonitorInfo(
+                    id=1,
+                    name="Primary Display",
+                    width=1920,
+                    height=1080,
+                    x=0,
+                    y=0,
+                    is_primary=True,
+                    scale=1.0,
+                )
+            )
+
+    return monitors
+
+
+def find_monitor(monitors: list[MonitorInfo], query: int | str) -> MonitorInfo | None:
+    """
+    Find a monitor in the list by ID (int), name (str), or keywords ('primary', 'secondary').
+    """
+    if isinstance(query, int):
+        for m in monitors:
+            if m.id == query:
+                return m
+        return None
+
+    q_str = str(query).strip().lower()
+    if q_str.isdigit():
+        q_int = int(q_str)
+        for m in monitors:
+            if m.id == q_int:
+                return m
+
+    if q_str in ("primary", "main"):
+        for m in monitors:
+            if m.is_primary:
+                return m
+        return monitors[0] if monitors else None
+
+    if q_str in ("secondary", "external"):
+        for m in monitors:
+            if not m.is_primary:
+                return m
+        return monitors[-1] if monitors else None
+
+    # Exact name match (case-insensitive)
+    for m in monitors:
+        if m.name.lower() == q_str:
+            return m
+
+    # Substring match
+    for m in monitors:
+        if q_str in m.name.lower():
+            return m
+
+    return None
+
+
+# =============================================================================
 # Screenshot Capture Tools
 # =============================================================================
 
 
 @mcp.tool()
+def list_monitors() -> MonitorListResult:
+    """
+    List all connected monitors/displays with IDs, names, resolutions, offsets, and primary status.
+    Use this to inspect available screens before taking targeted single-monitor screenshots.
+    """
+    monitors = detect_linux_monitors()
+    virtual_w = max((m.x + m.width for m in monitors), default=1920)
+    virtual_h = max((m.y + m.height for m in monitors), default=1080)
+
+    summary = ", ".join(
+        f"[{m.id}] {m.name}: {m.width}x{m.height} at ({m.x},{m.y}){' (Primary)' if m.is_primary else ''}"
+        for m in monitors
+    )
+    return MonitorListResult(
+        monitors=monitors,
+        count=len(monitors),
+        virtual_width=virtual_w,
+        virtual_height=virtual_h,
+        message=f"Found {len(monitors)} active monitor(s): {summary}"
+    )
+
+
+@mcp.tool()
 def capture_screenshot(
     mode: Annotated[
-        Literal["fullscreen", "region", "window"],
-        Field(description="Capture mode: fullscreen, region (interactive selection), or window")
+        Literal["fullscreen", "region", "window", "monitor"],
+        Field(description="Capture mode: 'fullscreen' (all screens), 'monitor' (specific monitor), 'region' (coordinates), or 'window'")
     ] = "fullscreen",
+    monitor: Annotated[
+        int | str | None,
+        Field(description="Target monitor to capture: 1-based index (e.g. 1, 2) or name (e.g. 'eDP-1', 'HDMI-A-1', 'primary')")
+    ] = None,
     x: Annotated[int | None, Field(description="X coordinate for region capture")] = None,
     y: Annotated[int | None, Field(description="Y coordinate for region capture")] = None,
     width: Annotated[int | None, Field(description="Width for region capture")] = None,
@@ -288,53 +526,101 @@ def capture_screenshot(
     include_ocr: Annotated[bool, Field(description="Run Tesseract OCR to extract on-screen text coordinates (enabled by default)")] = True,
 ) -> ScreenshotResult:
     """
-    Capture a screenshot of the screen, a region, or a specific window.
-
-    On macOS, this uses the native screencapture command.
-    On other systems, it uses PIL's ImageGrab or pyautogui as fallback.
-
-    For window capture on macOS, you need the numeric window ID (not the window name).
-    You can find window IDs using: osascript -e 'tell app "System Events" to get id of windows of processes'
+    Capture a screenshot of a specific monitor, the entire desktop, a region, or a window.
+    Automatically runs Tesseract OCR on the captured image to detect on-screen text bounding boxes.
     """
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
         tmp_path = tmp.name
 
     try:
-        if sys.platform == "darwin":
-            # macOS - use native screencapture
-            cmd = ["screencapture"]
+        monitors = detect_linux_monitors()
+        target_mon = find_monitor(monitors, monitor) if monitor is not None else None
 
-            if mode == "region" and all(v is not None for v in [x, y, width, height]):
-                # Capture specific region
+        if monitor is not None and target_mon is None:
+            available = ", ".join(f"{m.id}: {m.name}" for m in monitors)
+            raise ValueError(f"Monitor '{monitor}' not found. Available monitors: {available}")
+
+        if sys.platform == "darwin":
+            # macOS fallback
+            cmd = ["screencapture"]
+            if target_mon is not None:
+                cmd.extend(["-D", str(target_mon.id)])
+            elif mode == "region" and all(v is not None for v in [x, y, width, height]):
                 cmd.extend(["-R", f"{x},{y},{width},{height}"])
             elif mode == "region":
-                # Interactive region selection
                 cmd.append("-i")
             elif mode == "window":
                 if window_id is not None:
-                    # Capture specific window by ID (screencapture -l requires integer window ID)
                     cmd.extend(["-l", str(window_id)])
                 else:
-                    # Interactive window selection
                     cmd.append("-w")
-            # fullscreen is default behavior
 
             cmd.append(tmp_path)
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-
             if result.returncode != 0:
                 raise RuntimeError(f"screencapture failed: {result.stderr}")
 
         else:
-            # Windows/Linux - use PIL or pyautogui
+            # Linux & other systems - capture canvas and apply fractional-scale aware cropping
             try:
                 from PIL import ImageGrab
 
+                canvas = None
+                # Try spectacle if on Wayland/KDE for pristine buffer
+                if shutil.which("spectacle") and os.environ.get("WAYLAND_DISPLAY"):
+                    try:
+                        spec_res = subprocess.run(
+                            ["spectacle", "-b", "-n", "-f", "-o", tmp_path],
+                            capture_output=True,
+                            timeout=10
+                        )
+                        if spec_res.returncode == 0 and os.path.exists(tmp_path):
+                            canvas = PILImage.open(tmp_path)
+                    except Exception:
+                        canvas = None
+
+                if canvas is None:
+                    canvas = ImageGrab.grab()
+
+                total_logical_w = max((m.x + m.width for m in monitors), default=canvas.width)
+                total_logical_h = max((m.y + m.height for m in monitors), default=canvas.height)
+
+                scale_x = canvas.width / total_logical_w if total_logical_w > 0 else 1.0
+                scale_y = canvas.height / total_logical_h if total_logical_h > 0 else 1.0
+
                 if mode == "region" and all(v is not None for v in [x, y, width, height]):
-                    bbox = (x, y, x + width, y + height)
-                    screenshot = ImageGrab.grab(bbox=bbox)
+                    if target_mon is not None:
+                        rx = int(round((target_mon.x + x) * scale_x))
+                        ry = int(round((target_mon.y + y) * scale_y))
+                        rw = int(round(width * scale_x))
+                        rh = int(round(height * scale_y))
+                    else:
+                        rx = int(round(x * scale_x))
+                        ry = int(round(y * scale_y))
+                        rw = int(round(width * scale_x))
+                        rh = int(round(height * scale_y))
+                    rx = max(0, min(rx, canvas.width))
+                    ry = max(0, min(ry, canvas.height))
+                    rw = max(1, min(rw, canvas.width - rx))
+                    rh = max(1, min(rh, canvas.height - ry))
+                    screenshot = canvas.crop((rx, ry, rx + rw, ry + rh))
+                elif target_mon is not None or mode == "monitor":
+                    mon_to_grab = target_mon or (monitors[0] if monitors else None)
+                    if mon_to_grab is not None:
+                        cx = int(round(mon_to_grab.x * scale_x))
+                        cy = int(round(mon_to_grab.y * scale_y))
+                        cw = int(round(mon_to_grab.width * scale_x))
+                        ch = int(round(mon_to_grab.height * scale_y))
+                        cx = max(0, min(cx, canvas.width))
+                        cy = max(0, min(cy, canvas.height))
+                        cw = max(1, min(cw, canvas.width - cx))
+                        ch = max(1, min(ch, canvas.height - cy))
+                        screenshot = canvas.crop((cx, cy, cx + cw, cy + ch))
+                    else:
+                        screenshot = canvas
                 else:
-                    screenshot = ImageGrab.grab()
+                    # Fullscreen / all monitors combined
+                    screenshot = canvas
 
                 screenshot.save(tmp_path, "PNG")
             except Exception as e:
@@ -348,18 +634,22 @@ def capture_screenshot(
         if include_ocr:
             detected_text = get_or_extract_ocr_elements(image_id, image)
 
+        target_label = f" (Monitor: {target_mon.name})" if target_mon else ""
         return ScreenshotResult(
             image_id=image_id,
             width=image.width,
             height=image.height,
             detected_text=detected_text,
-            message=f"Screenshot captured successfully ({mode} mode)"
+            message=f"Screenshot captured successfully ({mode} mode{target_label})"
         )
 
     finally:
         # Cleanup temp file
         if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
 
 @mcp.tool()

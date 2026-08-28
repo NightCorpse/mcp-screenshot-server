@@ -13,6 +13,27 @@ class TextElement(BaseModel):
     confidence: float = Field(default=100.0, description="OCR confidence score (0-100)")
 
 
+class MonitorInfo(BaseModel):
+    """Information about a display monitor."""
+    id: int = Field(description="Monitor index (1-based: 1, 2, ...)")
+    name: str = Field(description="Monitor name or connector (e.g. eDP-1, HDMI-A-1, Display 1)")
+    width: int = Field(description="Width in pixels")
+    height: int = Field(description="Height in pixels")
+    x: int = Field(default=0, description="X offset on virtual screen")
+    y: int = Field(default=0, description="Y offset on virtual screen")
+    is_primary: bool = Field(default=False, description="Whether this is the primary monitor")
+    scale: float | None = Field(default=1.0, description="Display scale factor if available")
+
+
+class MonitorListResult(BaseModel):
+    """List of available monitors."""
+    monitors: list[MonitorInfo] = Field(description="List of detected monitors")
+    count: int = Field(description="Total number of active monitors")
+    virtual_width: int = Field(description="Total virtual screen width across all monitors")
+    virtual_height: int = Field(description="Total virtual screen height across all monitors")
+    message: str = Field(description="Status message")
+
+
 class ScreenshotResult(BaseModel):
     """Result of a screenshot capture or load operation."""
     image_id: str = Field(description="Unique identifier for the captured image")

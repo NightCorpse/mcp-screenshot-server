@@ -5,7 +5,32 @@ import os
 import tempfile
 from pathlib import Path
 
-import pytest
+try:
+    import pytest
+except ImportError:
+    class _PytestShim:
+        class raises:
+            def __init__(self, expected_exc, match=None):
+                self.expected_exc = expected_exc
+                self.match = match
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                if exc_type is None:
+                    raise AssertionError(f"Expected {self.expected_exc} was not raised")
+                if not issubclass(exc_type, self.expected_exc):
+                    return False
+                if self.match and self.match not in str(exc_val):
+                    raise AssertionError(f"Pattern '{self.match}' not found in '{exc_val}'")
+                return True
+
+        @staticmethod
+        def fixture(func):
+            return func
+
+    pytest = _PytestShim()
 from PIL import Image as PILImage
 
 # Import the server and storage modules
@@ -415,5 +440,64 @@ class TestOCRTools:
         res = server.detect_text(image_id=test_image)
         assert res.image_id == test_image
         assert isinstance(res.elements, list)
+
+
+class TestMultiMonitorTools:
+    """Test Linux multi-monitor detection and capture tools."""
+
+    def test_detect_linux_monitors(self):
+        """Test detecting Linux monitors."""
+        monitors = server.detect_linux_monitors()
+        assert isinstance(monitors, list)
+        assert len(monitors) >= 1
+        for m in monitors:
+            assert m.id >= 1
+            assert m.width > 0
+            assert m.height > 0
+
+    def test_find_monitor_by_id(self):
+        """Test finding monitor by ID."""
+        monitors = [
+            server.MonitorInfo(id=1, name="eDP-1", width=2560, height=1600, x=2304, y=0, is_primary=True),
+            server.MonitorInfo(id=2, name="HDMI-A-1", width=2304, height=1296, x=0, y=0, is_primary=False),
+        ]
+        m1 = server.find_monitor(monitors, 1)
+        assert m1 is not None and m1.name == "eDP-1"
+        m2 = server.find_monitor(monitors, "2")
+        assert m2 is not None and m2.name == "HDMI-A-1"
+
+    def test_find_monitor_by_name_and_keyword(self):
+        """Test finding monitor by name and keyword."""
+        monitors = [
+            server.MonitorInfo(id=1, name="eDP-1", width=2560, height=1600, x=2304, y=0, is_primary=True),
+            server.MonitorInfo(id=2, name="HDMI-A-1", width=2304, height=1296, x=0, y=0, is_primary=False),
+        ]
+        m_pri = server.find_monitor(monitors, "primary")
+        assert m_pri is not None and m_pri.is_primary is True
+        m_hdmi = server.find_monitor(monitors, "hdmi-a-1")
+        assert m_hdmi is not None and m_hdmi.id == 2
+        m_sub = server.find_monitor(monitors, "HDMI")
+        assert m_sub is not None and m_sub.id == 2
+
+    def test_list_monitors_tool(self):
+        """Test list_monitors tool."""
+        res = server.list_monitors()
+        assert res.count >= 1
+        assert res.virtual_width > 0
+        assert res.virtual_height > 0
+        assert len(res.monitors) == res.count
+
+    def test_capture_screenshot_with_monitor(self):
+        """Test capturing screenshot of a specific monitor."""
+        res = server.capture_screenshot(monitor=1, include_ocr=False)
+        assert res.width > 0
+        assert res.height > 0
+        assert res.image_id in server._image_store
+
+    def test_capture_screenshot_invalid_monitor(self):
+        """Test capturing screenshot of non-existent monitor raises ValueError."""
+        with pytest.raises(ValueError, match="not found"):
+            server.capture_screenshot(monitor=999)
+
 
 
