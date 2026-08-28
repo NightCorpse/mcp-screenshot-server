@@ -17,12 +17,13 @@ A powerful [Model Context Protocol (MCP)](https://modelcontextprotocol.io) serve
 - ⚡ **Batch Annotations** - Apply multiple annotations in a single call
 - 🏷️ **Quick Labeling** - Label multiple regions with one command
 - 🎯 **Pixel-Perfect Mode** - `precise_annotate` for exact coordinate control
+- 🔍 **Tesseract OCR Integration** - `detect_text` to extract on-screen text coordinates and `target_text` for automatic element alignment
 
-### 🤖 AI Vision Integration
+### 🤖 AI Vision & OCR Integration
 
 - Works great with **Gemini**, **Claude**, and other vision models for intelligent annotation placement
-- AI can analyze images and provide exact coordinates for annotations
-- Combine vision analysis with `precise_annotate` for pinpoint accuracy
+- Local **Tesseract OCR** extraction returns exact `[x, y, width, height]` bounding boxes without hallucinated coordinates
+- Use `target_text` in `precise_annotate` or `annotate` to automatically target buttons, labels, and UI elements
 
 ### Capture & Load
 
