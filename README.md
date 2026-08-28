@@ -17,6 +17,7 @@ A powerful [Model Context Protocol (MCP)](https://modelcontextprotocol.io) serve
 - ⚡ **Batch Annotations** - Apply multiple annotations in a single call
 - 🏷️ **Quick Labeling** - Label multiple regions with one command
 - 🎯 **Pixel-Perfect Mode** - `precise_annotate` for exact coordinate control
+- 🔤 **Resolution-Aware Text** - Suggested font size is returned with each image and used automatically when omitted
 - 🔍 **Tesseract OCR Integration** - `detect_text` to extract on-screen text coordinates and `target_text` for automatic element alignment
 
 ### 🤖 AI Vision & OCR Integration
@@ -249,6 +250,10 @@ preview_annotation(img, "arrow", x=500, y=300, x2=830, y2=195, padding=100)
 preview_annotation(img, "text", x=830, y=160, text="Code Button", font_size=24)
 preview_annotation(img, "highlight", x=830, y=195, width=140, height=55)
 preview_annotation(img, "callout", x=830, y=195, text="Click here")
+
+# Omit font_size to use the resolution-aware recommendation, or override it explicitly
+preview_annotation(img, "text", x=830, y=160, text="Auto-scaled label")
+precise_annotate(img, "text", x=830, y=160, text="Custom label", font_size=36)
 
 # Multiple annotations in one call
 batch_annotate(img, '[{"type":"box","position":"top-left"},{"type":"text","position":"center","text":"Hello"}]')

@@ -39,6 +39,10 @@ class ScreenshotResult(BaseModel):
     image_id: str = Field(description="Unique identifier for the captured image")
     width: int = Field(description="Image width in pixels")
     height: int = Field(description="Image height in pixels")
+    suggested_font_size: int = Field(
+        default=24,
+        description="Recommended annotation font size for this image resolution"
+    )
     message: str = Field(description="Status message")
     detected_text: list[TextElement] = Field(
         default_factory=list,

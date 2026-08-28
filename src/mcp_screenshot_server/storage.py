@@ -27,6 +27,7 @@ _FONT_PATHS = [
     "/System/Library/Fonts/SFNSText.ttf",  # macOS fallback
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",  # Linux
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",  # Linux bold
+    "DejaVuSans.ttf",  # Pillow bundled fallback
     "C:\\Windows\\Fonts\\arial.ttf",  # Windows
     "C:\\Windows\\Fonts\\arialbd.ttf",  # Windows bold
 ]

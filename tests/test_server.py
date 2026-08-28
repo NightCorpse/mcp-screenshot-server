@@ -65,6 +65,24 @@ class TestImageStorage:
         with pytest.raises(ValueError, match="not found"):
             server._get_image("nonexistent_id")
 
+    @pytest.mark.parametrize(
+        ("height", "expected"),
+        [(720, 16), (1080, 24), (2134, 47), (2160, 48)],
+    )
+    def test_suggest_font_size_scales_with_image_height(self, height, expected):
+        """Recommend readable text across common screenshot resolutions."""
+        image = PILImage.new("RGB", (100, height), color="white")
+        assert server._suggest_font_size(image) == expected
+
+    def test_load_image_returns_suggested_font_size(self):
+        """Expose the recommendation when an image enters the session."""
+        with tempfile.NamedTemporaryFile(suffix=".png") as tmp:
+            PILImage.new("RGB", (800, 1350), color="white").save(tmp.name)
+            result = server.load_image(tmp.name, include_ocr=False)
+
+        assert result.suggested_font_size == 30
+        assert "30px" in result.message
+
 
 class TestAnnotationTools:
     """Test annotation tools."""
@@ -115,6 +133,25 @@ class TestAnnotationTools:
         )
         assert result.image_id == test_image
         assert "Text 'Hello' added" in result.message
+
+    def test_add_text_auto_scales_and_respects_explicit_override(self, monkeypatch):
+        """Use the recommendation only when the caller omits font_size."""
+        source = PILImage.new("RGB", (800, 1350), color="white")
+        automatic_id = server._store_image(source.copy())
+        explicit_id = server._store_image(source.copy())
+        observed_sizes = []
+        original_get_font = server._get_font
+
+        def record_font_size(size):
+            observed_sizes.append(size)
+            return original_get_font(size)
+
+        monkeypatch.setattr(server, "_get_font", record_font_size)
+
+        server.add_text(automatic_id, 20, 20, "Scaled", color="black")
+        server.add_text(explicit_id, 20, 20, "Scaled", color="black", font_size=18)
+
+        assert observed_sizes == [30, 18]
 
     def test_add_highlight(self, test_image):
         """Test adding a highlight region."""
