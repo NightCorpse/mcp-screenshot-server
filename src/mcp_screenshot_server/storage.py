@@ -89,7 +89,7 @@ def get_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
                 return ImageFont.truetype(path, size)
             except OSError:
                 continue
-    return ImageFont.load_default()
+    return ImageFont.load_default(size=size)
 
 
 def generate_image_id() -> str:

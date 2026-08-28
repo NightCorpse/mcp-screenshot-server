@@ -83,6 +83,12 @@ class TestImageStorage:
         assert result.suggested_font_size == 30
         assert "30px" in result.message
 
+    def test_default_font_fallback_preserves_requested_size(self, monkeypatch):
+        """Keep font scaling effective when no system font path exists."""
+        monkeypatch.setattr(storage, "_FONT_PATHS", [])
+        font = storage.get_font(38)
+        assert font.size == 38
+
 
 class TestAnnotationTools:
     """Test annotation tools."""
