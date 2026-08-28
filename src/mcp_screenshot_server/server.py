@@ -116,10 +116,10 @@ mcp = FastMCP(
     - list_images, get_image, duplicate_image, delete_image
 
     ## Final Result Delivery
-    After completing a capture, annotation, or editing workflow, call get_image with
-    the final image_id so the user can see the result in the chat. Use save_image,
-    quick_save, copy_to_clipboard, or open_in_preview instead when the user explicitly
-    requests one of those delivery methods.
+    Always deliver the final result after completing a capture, annotation, or edit:
+    - In chat (default): call get_image with the final image_id to render it inline.
+    - On-screen viewer: call open_in_preview when the user wants it opened locally.
+    - Saved file: after save_image or quick_save, provide the full absolute path.
     """,
 )
 
