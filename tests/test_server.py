@@ -744,3 +744,23 @@ class TestMultiMonitorTools:
         """Test capturing screenshot of non-existent monitor raises ValueError."""
         with pytest.raises(ValueError, match="not found"):
             server.capture_screenshot(monitor=999)
+
+
+class TestServerGuidanceAndToolDescriptions:
+    """Verify MCP server instructions and tool docstrings enforce expected workflows."""
+
+    def test_mcp_instructions_emphasize_preview_and_open_in_preview(self):
+        """Instructions must guide LLMs to use preview_annotation and open_in_preview."""
+        instructions = server.mcp.instructions
+        assert "ALWAYS use `preview_annotation` first" in instructions
+        assert "open_in_preview (PRIMARY delivery" in instructions
+        assert "Primary on-screen display: call `open_in_preview`" in instructions
+        assert "undo (for rollbacks only, NOT for coordinate trial-and-error)" in instructions
+
+    def test_tool_docstrings_clarify_preview_and_delivery_roles(self):
+        """Tool descriptions must reinforce proper tool usage."""
+        tools = server.mcp._tool_manager._tools
+        assert "REQUIRED PRE-STEP" in tools["preview_annotation"].description
+        assert "PRIMARY VISUAL DELIVERY TOOL" in tools["open_in_preview"].description
+        assert "ONLY to revert accidental mistakes" in tools["undo"].description
+        assert "support inline image rendering" in tools["get_image"].description

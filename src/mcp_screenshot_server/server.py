@@ -75,29 +75,24 @@ mcp = FastMCP(
     instructions="""
     MCP Screenshot Server - A powerful tool for capturing and annotating screenshots.
 
-    ## 🎯 RECOMMENDED: Smart Annotation Tools (Use These!)
+    ## 🎯 RECOMMENDED: Annotation Workflow
+    1. Coordinate Verification & Iterative Previews:
+       - NEVER use definitive annotations (annotate/precise_annotate) combined with undo for trial and error.
+       - ALWAYS use `preview_annotation` first to inspect and refine candidate coordinates in a contextual crop.
+       - Call `preview_annotation` repeatedly until the placement, bounding box, or callout is exact.
+       - Once verified, apply the definitive annotation using `precise_annotate` with the exact same parameters.
 
-    ### annotate - Unified smart annotation with flexible positioning
-    Position formats: named ("top-left", "center", "bottom-right"),
-                     percentage ("50%, 30%"), or pixels ("100, 200")
-    Example: annotate(img, "box", "top-left", width=200, color="blue")
-    Example: annotate(img, "text", "center", text="Important!")
-    Example: annotate(img, "arrow", "20%,50%", end_position="80%,50%")
-
-    ### preview_annotation - Test precise placement without modifying the image
-    Supports box, circle, text, arrow, line, highlight, and callout. Increase padding
-    to inspect a wider area; width/height always define the final annotation itself.
-    For text, omit font_size for regular, use small/regular/large, or pass exact pixels.
-    Refine coordinates in the contextual crop, then call precise_annotate with the same values.
-
-    ### batch_annotate - Apply multiple annotations in ONE call
-    Pass JSON array: [{"type":"box","position":"top-left"},{"type":"text","position":"center","text":"Hi"}]
-
-    ### label_regions - Quickly label multiple areas
-    Pass JSON object: {"Header":"top-center", "Sidebar":"center-left", "Main":"center"}
+    2. Smart Annotation Tools:
+       - `preview_annotation`: Non-destructive preview tool for box, circle, text, arrow, line, highlight, callout.
+         Increase padding to inspect wider context; width/height define the final element.
+         For text, omit font_size for regular, use small/regular/large, or pass exact pixels.
+       - `precise_annotate`: Definitive pixel-perfect annotation tool (or auto-target using target_text).
+       - `annotate`: Unified smart positioning tool (top-left, center, 50%,30%).
+       - `batch_annotate`: Apply multiple annotations in ONE call.
+       - `label_regions`: Quickly label multiple areas.
 
     ## Capture Tools:
-    - capture_screenshot: Capture full screen, window, or region
+    - capture_screenshot: Capture full screen, monitor, window, or region
     - load_image: Load an existing image file
 
     ## Basic Annotation Tools (for precise pixel control):
@@ -107,19 +102,20 @@ mcp = FastMCP(
     ## Editing Tools:
     - blur_region, crop_image, resize_image, rotate_image, flip_image
     - adjust_brightness, adjust_contrast, add_watermark
-    - undo, get_undo_count
+    - undo (for rollbacks only, NOT for coordinate trial-and-error), get_undo_count
 
-    ## Export Tools:
-    - save_image, quick_save, copy_to_clipboard, open_in_preview
+    ## Export & Viewing Tools:
+    - open_in_preview (PRIMARY delivery to open image on user's screen), open_file_in_preview
+    - save_image, quick_save, copy_to_clipboard
 
     ## Session Tools:
     - list_images, get_image, duplicate_image, delete_image
 
-    ## Final Result Delivery
+    ## 🚀 Final Result Delivery
     Always deliver the final result after completing a capture, annotation, or edit:
-    - In chat (default): call get_image with the final image_id to render it inline.
-    - On-screen viewer: call open_in_preview when the user wants it opened locally.
-    - Saved file: after save_image or quick_save, provide the full absolute path.
+    - Primary on-screen display: call `open_in_preview` with the final image_id to open the image directly in the user's OS viewer (xdg-open on Linux, Preview on macOS) and mention the file path.
+    - Saved files: after `save_image` or `quick_save`, provide the full absolute path.
+    - In-chat rendering: call `get_image` when the client environment supports inline ImageContent rendering.
     """,
 )
 
@@ -1319,11 +1315,13 @@ def preview_annotation(
     minimum_height: Annotated[int, Field(description="Minimum preview viewport height", gt=0)] = 240,
 ) -> Image:
     """
-    Preview a candidate annotation in a cropped view without changing the source image.
+    REQUIRED PRE-STEP: Preview a candidate annotation in a contextual crop without modifying the source image.
 
-    All coordinates refer to the original image. Width, height, and radius describe
-    the final annotation only. Increase padding to inspect a wider surrounding area.
-    Call repeatedly to refine placement, then use precise_annotate with the same values.
+    Always use this tool repeatedly to test and refine coordinates, size, and appearance before applying definitive changes.
+    DO NOT use definitive annotate/undo loops for trial and error.
+    All coordinates refer to the original image. Width, height, and radius describe the final annotation only.
+    Increase padding to inspect a wider surrounding area without changing annotation size.
+    Once satisfied, call precise_annotate with the exact same coordinate parameters.
     """
     source = _get_image(image_id)
     preview = source.convert("RGBA")
@@ -1365,8 +1363,10 @@ def precise_annotate(
     number: Annotated[int | None, Field(gt=0, description="Explicit number for callout type")] = None,
 ) -> AnnotationResult:
     """
-    Pixel-perfect annotation tool. Places annotations at EXACT pixel coordinates
-    or automatically targets detected text elements via Tesseract OCR.
+    Definitive pixel-perfect annotation tool.
+
+    Call this AFTER verifying placement with preview_annotation (or when auto-aligning via target_text).
+    Places annotations at EXACT pixel coordinates or targets detected text elements via Tesseract OCR.
 
     Coordinates:
     - x, y: Top-left corner for box, center for circle, start for text
@@ -2041,7 +2041,12 @@ def add_border(
 def undo(
     image_id: Annotated[str, Field(description="ID of the image to undo")]
 ) -> AnnotationResult:
-    """Undo the last annotation on an image."""
+    """
+    Undo the last definitive annotation on an image.
+
+    Note: Use this ONLY to revert accidental mistakes. For testing coordinates and placement,
+    always use preview_annotation instead of modifying and undoing.
+    """
     if image_id not in _image_history or not _image_history[image_id]:
         raise ValueError(f"No undo history available for image '{image_id}'")
 
@@ -2474,7 +2479,12 @@ def configure_limits(
 def get_image(
     image_id: Annotated[str, Field(description="ID of the image to retrieve")]
 ) -> Image:
-    """Display the final image in chat so the user can see the visual result."""
+    """
+    Retrieve raw image data for MCP clients that support inline image rendering in chat.
+
+    Note: Some CLI/terminal environments may not render inline ImageContent. Use open_in_preview
+    as the primary tool to guarantee opening the image in the user's desktop viewer.
+    """
     if image_id not in _image_store:
         raise ValueError(f"Image '{image_id}' not found. Use list_images to see available images.")
 
@@ -2813,10 +2823,10 @@ def open_in_preview(
     save_path: Annotated[str | None, Field(description="Optional path to save before opening")] = None,
 ) -> PreviewResult:
     """
-    Open an image in the native Preview app (macOS only).
+    PRIMARY VISUAL DELIVERY TOOL: Open an image in the user's default desktop viewer.
 
-    On macOS, this opens the image in Preview.app for viewing and native annotation.
-    On other platforms, it opens with the default image viewer.
+    On Linux uses xdg-open, on macOS uses Preview.app, on Windows uses the default viewer.
+    Call this to ensure the user visibly sees the screenshot or final annotated image on screen.
     """
     if image_id not in _image_store:
         raise ValueError(f"Image '{image_id}' not found.")

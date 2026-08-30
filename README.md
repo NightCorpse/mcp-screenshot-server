@@ -299,15 +299,20 @@ batch_annotate(img, '[{"type":"box","position":"top-left"},{"type":"text","posit
 label_regions(img, '{"Header":"top-center","Sidebar":"center-left","Main":"center"}')
 ```
 
-### 🤖 Using with AI Vision Models
+### 🤖 Recommended AI Workflow: Preview-First & Visual Delivery
 
-For the most accurate annotations, combine with vision-capable AI models:
+For the most accurate annotations and visual verification, follow this standard loop:
 
 ```
-1. Take screenshot with browser/capture tool
-2. AI (Gemini/Claude) analyzes image and identifies element coordinates
-3. Use precise_annotate with exact coordinates from AI
-4. Result: pixel-perfect annotations every time
+1. Capture / Load: Take screenshot or load image (Tesseract OCR automatically extracts text bounds).
+2. Preview-First Placement: Call `preview_annotation` to visually inspect candidate coordinates in a non-destructive crop.
+   - Refine coordinates or padding until alignment is pixel-perfect.
+   - Avoid definitive annotate/undo trial-and-error loops.
+3. Definitive Application: Call `precise_annotate` using the verified coordinates.
+4. Visual Delivery:
+   - On-screen display (Primary): Call `open_in_preview` to open the final result in the default OS image viewer (xdg-open on Linux, Preview on macOS, default viewer on Windows).
+   - Saved file: Call `save_image` or `quick_save` and report the absolute file path.
+   - In-chat: Call `get_image` if your client supports inline image rendering.
 ```
 
 ### Screenshot Capture & Multi-Monitor
@@ -354,23 +359,23 @@ fractional scaling produces a supersampled compositor buffer. Pass
 
 ### Image Management
 
-| Tool              | Description                            |
-| ----------------- | -------------------------------------- |
-| `list_images`     | List all images in the current session |
-| `get_image`       | Get a specific image by ID             |
-| `duplicate_image` | Create a copy of an existing image     |
-| `delete_image`    | Remove an image from the session       |
+| Tool              | Description                                                          |
+| ----------------- | -------------------------------------------------------------------- |
+| `list_images`     | List all images in the current session                               |
+| `get_image`       | Retrieve raw image data for clients supporting inline chat rendering |
+| `duplicate_image` | Create a copy of an existing image                                   |
+| `delete_image`    | Remove an image from the session                                     |
 
-### Export Tools
+### Export & Viewing Tools
 
-| Tool                   | Description                                   |
-| ---------------------- | --------------------------------------------- |
-| `save_image`           | Save image to disk (PNG, JPG, WebP, etc.)     |
-| `quick_save`           | Quick save to Desktop/Downloads/Documents     |
-| `copy_to_clipboard`    | Copy image to system clipboard                |
-| `get_image_base64`     | Get image as base64-encoded string            |
-| `open_in_preview`      | Open image in macOS Preview or default viewer |
-| `open_file_in_preview` | Open any image file in Preview/default viewer |
+| Tool                   | Description                                                                 |
+| ---------------------- | --------------------------------------------------------------------------- |
+| `open_in_preview`      | **Primary viewer:** Open image in default OS viewer (`xdg-open` / Preview)  |
+| `open_file_in_preview` | Open any external image file in default OS viewer                           |
+| `save_image`           | Save image to disk (PNG, JPG, WebP, etc.)                                   |
+| `quick_save`           | Quick save to Desktop/Downloads/Documents                                   |
+| `copy_to_clipboard`    | Copy image to system clipboard                                              |
+| `get_image_base64`     | Get image as base64-encoded string                                          |
 
 ## macOS Preview Integration
 
